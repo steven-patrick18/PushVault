@@ -34,8 +34,19 @@ Proves via the restricted `pv_app` role that a tenant cannot read, update, or in
 
 ## Milestones
 
-- [x] **M1** — Foundation: schema + RLS + auth + properties
-- [ ] **M2** — Capture: snippet + service worker + subscribe API
-- [ ] **M3** — Send engine: BullMQ queues, frequency caps, token pruning
-- [ ] **M4** — Dashboard v1: subscribers, segments, campaign composer + reports
-- [ ] **M5** — Hardening: rate limits, audit log, erasure, load tests
+- [x] **M1** — Foundation: schema + RLS + auth + properties (RLS test 6/6)
+- [x] **M2** — Capture: snippet (≈3 KB gz) + service worker + subscribe API + demo store
+- [x] **M3** — Send engine: per-tenant queues, frequency caps, 410 pruning, 429 backoff, pacing
+- [x] **M4** — Dashboard v1: subscribers, segments, campaign manager with platform previews, property manager (verify + page allow/block + prompt designer), settings
+- [x] **M5** — Hardening: rate limits (subscribe 10/min/IP/property, login 5/min/IP), audit log + viewer, GDPR erasure, maintenance jobs (segment cache, stuck-campaign finalizer, 90d send retention), load test 100 req/s sustained (p50 76 ms)
+
+## Production notes
+
+- **Redis/BullMQ**: the send engine uses in-process per-tenant pools mirroring the
+  `push-send:{tenantId}` queue layout; swap in BullMQ workers when Redis is available.
+- **Partitioning**: `sends` should be partitioned monthly by `sent_at` in production —
+  native SQL (`PARTITION BY RANGE`), applied at deploy time; Prisma does not manage partitions.
+- **Rate limiting**: in-memory sliding window per process; back with Redis when running replicas.
+- **GeoIP**: set `GEOIP_DB_PATH` to a MaxMind GeoLite2-City `.mmdb` to enable geo capture.
+- Passwords/API keys hashed with scrypt (Node built-in); switch to argon2id if a native
+  dependency is acceptable.

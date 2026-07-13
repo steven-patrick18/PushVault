@@ -18,6 +18,15 @@ interface User {
   createdAt: string;
 }
 
+interface AuditRow {
+  id: string;
+  action: string;
+  entityType: string;
+  entityId: string | null;
+  user: string;
+  at: string;
+}
+
 export default function Settings() {
   const [tenant, setTenant] = useState<Tenant | null>(null);
   const [users, setUsers] = useState<User[]>([]);
@@ -25,9 +34,12 @@ export default function Settings() {
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
 
+  const [audit, setAudit] = useState<AuditRow[]>([]);
+
   useEffect(() => {
     api<Tenant>("/tenant").then(setTenant).catch((e) => setError(e.message));
     api<User[]>("/users").then(setUsers).catch(() => {});
+    api<AuditRow[]>("/audit").then(setAudit).catch(() => {});
   }, []);
 
   async function save() {
@@ -126,6 +138,41 @@ export default function Settings() {
           Per-property API keys are managed on each property's page (rotate from there). Keys are
           stored hashed and shown only once at creation.
         </div>
+      </div>
+
+      <div className="panel">
+        <h3>Audit log — last 100 actions</h3>
+        {audit.length === 0 ? (
+          <div className="empty">No audited actions yet.</div>
+        ) : (
+          <table>
+            <thead>
+              <tr>
+                <th>Action</th>
+                <th>Entity</th>
+                <th>Who</th>
+                <th>When</th>
+              </tr>
+            </thead>
+            <tbody>
+              {audit.map((a) => (
+                <tr key={a.id}>
+                  <td>
+                    <span className="commit-hash">{a.action}</span>
+                  </td>
+                  <td style={{ fontSize: 12 }}>
+                    {a.entityType}
+                    {a.entityId && (
+                      <span style={{ color: "var(--text-dim)" }}> · {a.entityId.slice(0, 8)}…</span>
+                    )}
+                  </td>
+                  <td style={{ fontSize: 12 }}>{a.user}</td>
+                  <td style={{ fontSize: 12 }}>{new Date(a.at).toLocaleString()}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
       </div>
     </>
   );

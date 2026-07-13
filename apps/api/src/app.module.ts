@@ -1,6 +1,7 @@
 import { Global, Module } from "@nestjs/common";
 import { JwtModule } from "@nestjs/jwt";
 import { PrismaService } from "./infra/prisma.service";
+import { MaintenanceService } from "./infra/maintenance.service";
 import { AuthModule } from "./modules/auth/auth.module";
 import { PropertiesModule } from "./modules/properties/properties.module";
 import { UpdatesModule } from "./modules/updates/updates.module";
@@ -39,7 +40,7 @@ class HealthController {
     SubscribersController,
     SettingsController,
   ],
-  providers: [PrismaService],
+  providers: [PrismaService, MaintenanceService],
   exports: [PrismaService],
 })
 export class AppModule {}

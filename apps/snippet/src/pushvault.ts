@@ -18,7 +18,12 @@ interface PromptConfig {
     logo?: string | null;
     size?: "compact" | "normal" | "large";
   };
-  reask?: { enabled?: boolean; cooldown_days?: number };
+  reask?: {
+    enabled?: boolean;
+    cooldown_days?: number; // legacy
+    cooldown_value?: number;
+    cooldown_unit?: "seconds" | "minutes" | "hours" | "days";
+  };
 }
 
 interface RemoteConfig {
@@ -281,7 +286,11 @@ interface RemoteConfig {
       if (!cfg0) return;
       const reask = cfg0.prompt_config?.reask;
       if (!reask?.enabled) return;
-      const cooldownMs = (reask.cooldown_days ?? 7) * 86400_000;
+      const UNIT_MS = { seconds: 1000, minutes: 60_000, hours: 3600_000, days: 86400_000 };
+      const cooldownMs =
+        reask.cooldown_value != null
+          ? reask.cooldown_value * (UNIT_MS[reask.cooldown_unit ?? "days"] ?? 86400_000)
+          : (reask.cooldown_days ?? 7) * 86400_000;
       if (Date.now() - prior.ts < cooldownMs) return;
       if (!pageMatches(cfg0.prompt_config?.pages)) return;
       arm(cfg0);

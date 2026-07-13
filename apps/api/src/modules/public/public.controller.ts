@@ -7,9 +7,11 @@ import {
   Ip,
   Post,
   Query,
+  UseGuards,
 } from "@nestjs/common";
 import { IsNotEmpty, IsObject, IsOptional, IsString, IsUUID } from "class-validator";
 import { PublicService } from "./public.service";
+import { RateLimit, RateLimitGuard } from "../../common/rate-limit.guard";
 
 class SubscribeDto {
   @IsString()
@@ -66,10 +68,12 @@ class PageviewDto {
 }
 
 @Controller("public")
+@UseGuards(RateLimitGuard)
 export class PublicController {
   constructor(private readonly service: PublicService) {}
 
   @Get("prompt-config")
+  @RateLimit({ limit: 60, windowSec: 60 })
   promptConfig(
     @Query("property_key") propertyKey: string,
     @Headers("origin") origin?: string,
@@ -79,6 +83,7 @@ export class PublicController {
 
   @Post("subscribe")
   @HttpCode(201)
+  @RateLimit({ limit: 10, windowSec: 60, perProperty: true })
   subscribe(
     @Body() dto: SubscribeDto,
     @Ip() ip: string,
@@ -90,18 +95,21 @@ export class PublicController {
 
   @Post("unsubscribe")
   @HttpCode(200)
+  @RateLimit({ limit: 30, windowSec: 60, perProperty: true })
   unsubscribe(@Body() dto: UnsubscribeDto, @Headers("origin") origin?: string) {
     return this.service.unsubscribe(dto.property_key, dto.endpoint, origin);
   }
 
   @Post("event/click")
   @HttpCode(200)
+  @RateLimit({ limit: 120, windowSec: 60 })
   click(@Body() dto: ClickDto) {
     return this.service.trackClick(dto.send_id);
   }
 
   @Post("event/pageview")
   @HttpCode(200)
+  @RateLimit({ limit: 120, windowSec: 60, perProperty: true })
   pageview(@Body() dto: PageviewDto, @Headers("origin") origin?: string) {
     return this.service.trackPageview(dto.property_key, dto.path, origin);
   }

@@ -61,9 +61,9 @@ export class SegmentsController {
   }
 
   @Post()
-  create(@CurrentUser() user: AuthUser, @Body() dto: CreateSegmentDto) {
+  async create(@CurrentUser() user: AuthUser, @Body() dto: CreateSegmentDto) {
     compileCriteria(dto.criteria); // validate before saving
-    return this.db(user).segment.create({
+    const segment = await this.db(user).segment.create({
       data: {
         tenantId: user.tenantId,
         propertyId: dto.propertyId,
@@ -72,6 +72,8 @@ export class SegmentsController {
         isDynamic: dto.isDynamic ?? true,
       },
     });
+    await this.audit(user, "segment.create", segment.id, null, dto.criteria);
+    return segment;
   }
 
   @Patch(":id")
@@ -81,16 +83,40 @@ export class SegmentsController {
     @Body() dto: UpdateSegmentDto,
   ) {
     if (dto.criteria) compileCriteria(dto.criteria);
-    return this.db(user).segment.update({
+    const before = await this.db(user).segment.findUnique({ where: { id } });
+    const segment = await this.db(user).segment.update({
       where: { id },
       data: { name: dto.name, criteria: dto.criteria as any },
     });
+    await this.audit(user, "segment.update", id, before?.criteria, dto.criteria);
+    return segment;
   }
 
   @Delete(":id")
   async remove(@CurrentUser() user: AuthUser, @Param("id", ParseUUIDPipe) id: string) {
     await this.db(user).segment.delete({ where: { id } });
+    await this.audit(user, "segment.delete", id, null, null);
     return { ok: true };
+  }
+
+  private async audit(
+    user: AuthUser,
+    action: string,
+    entityId: string,
+    before: unknown,
+    after: unknown,
+  ) {
+    await this.db(user).auditLog.create({
+      data: {
+        tenantId: user.tenantId,
+        userId: user.userId,
+        action,
+        entityType: "segment",
+        entityId,
+        before: before as any,
+        after: after as any,
+      },
+    });
   }
 
   /** Evaluate the live audience size for this segment. */

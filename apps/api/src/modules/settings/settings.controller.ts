@@ -58,4 +58,22 @@ export class SettingsController {
       orderBy: { createdAt: "asc" },
     });
   }
+
+  @Get("audit")
+  async audit(@CurrentUser() user: AuthUser) {
+    const db = this.prisma.forTenant(user.tenantId);
+    const [rows, users] = await Promise.all([
+      db.auditLog.findMany({ orderBy: { createdAt: "desc" }, take: 100 }),
+      db.user.findMany({ select: { id: true, email: true } }),
+    ]);
+    const emailById = new Map(users.map((u) => [u.id, u.email]));
+    return rows.map((r) => ({
+      id: r.id,
+      action: r.action,
+      entityType: r.entityType,
+      entityId: r.entityId,
+      user: r.userId ? (emailById.get(r.userId) ?? "unknown") : "system",
+      at: r.createdAt,
+    }));
+  }
 }

@@ -7,7 +7,12 @@ interface PromptConfig {
   pages: { include: string[]; exclude: string[] };
   text: { headline: string; yes: string; no: string };
   style: { position: string; accent: string; logo: string | null; size?: string };
-  reask: { enabled: boolean; cooldown_days: number };
+  reask: {
+    enabled: boolean;
+    cooldown_days?: number; // legacy
+    cooldown_value?: number;
+    cooldown_unit?: "seconds" | "minutes" | "hours" | "days";
+  };
 }
 
 interface Property {
@@ -37,7 +42,7 @@ const DEFAULT_CFG: PromptConfig = {
   pages: { include: ["*"], exclude: [] },
   text: { headline: "🔔 Get offers & price-drop alerts?", yes: "Yes, notify me", no: "No thanks" },
   style: { position: "top", accent: "#7C3AED", logo: null, size: "normal" },
-  reask: { enabled: false, cooldown_days: 7 },
+  reask: { enabled: false, cooldown_value: 7, cooldown_unit: "days" },
 };
 
 export default function PropertyDetail() {
@@ -58,7 +63,14 @@ export default function PropertyDetail() {
         pages: { ...DEFAULT_CFG.pages, ...p.promptConfig?.pages },
         text: { ...DEFAULT_CFG.text, ...p.promptConfig?.text },
         style: { ...DEFAULT_CFG.style, ...p.promptConfig?.style },
-        reask: { ...DEFAULT_CFG.reask, ...p.promptConfig?.reask },
+        reask: {
+          ...DEFAULT_CFG.reask,
+          ...p.promptConfig?.reask,
+          // migrate legacy cooldown_days into value/unit
+          cooldown_value:
+            p.promptConfig?.reask?.cooldown_value ?? p.promptConfig?.reask?.cooldown_days ?? 7,
+          cooldown_unit: p.promptConfig?.reask?.cooldown_unit ?? "days",
+        },
       });
     }).catch((e) => setError(e.message));
     api<PageRow[]>(`/properties/${id}/pages`).then(setPages).catch(() => {});
@@ -309,10 +321,19 @@ export default function PropertyDetail() {
                     type="number"
                     min={1}
                     style={{ width: 90 }}
-                    value={cfg.reask.cooldown_days}
-                    onChange={(e) => setCfg({ ...cfg, reask: { ...cfg.reask, cooldown_days: Number(e.target.value) } })}
+                    value={cfg.reask.cooldown_value ?? 7}
+                    onChange={(e) => setCfg({ ...cfg, reask: { ...cfg.reask, cooldown_value: Number(e.target.value) } })}
                   />
-                  <span style={{ color: "var(--text-dim)", fontSize: 13 }}>days</span>
+                  <select
+                    style={{ width: 130 }}
+                    value={cfg.reask.cooldown_unit ?? "days"}
+                    onChange={(e) => setCfg({ ...cfg, reask: { ...cfg.reask, cooldown_unit: e.target.value as any } })}
+                  >
+                    <option value="seconds">seconds</option>
+                    <option value="minutes">minutes</option>
+                    <option value="hours">hours</option>
+                    <option value="days">days</option>
+                  </select>
                 </>
               )}
             </div>
