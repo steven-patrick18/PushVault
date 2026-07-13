@@ -35,3 +35,21 @@ export class TaskPool {
 export function sleep(ms: number): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
+
+/**
+ * Evenly spaces task starts (campaign pacing). Each wait() reserves the next
+ * slot `intervalMs` after the previous one, so N per minute stays smooth
+ * regardless of worker concurrency.
+ */
+export class RateLimiter {
+  private nextAt = 0;
+
+  constructor(private readonly intervalMs: number) {}
+
+  async wait(): Promise<void> {
+    const now = Date.now();
+    const reserved = Math.max(this.nextAt, now);
+    this.nextAt = reserved + this.intervalMs;
+    if (reserved > now) await sleep(reserved - now);
+  }
+}

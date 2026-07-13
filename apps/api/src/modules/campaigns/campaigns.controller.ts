@@ -14,9 +14,11 @@ import {
 import {
   IsArray,
   IsDateString,
+  IsInt,
   IsOptional,
   IsString,
   IsUUID,
+  Min,
   MinLength,
 } from "class-validator";
 import { randomUUID } from "node:crypto";
@@ -59,6 +61,11 @@ class CreateCampaignDto {
   @IsOptional()
   @IsUUID()
   segmentId?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  pacingPerMinute?: number;
 }
 
 class UpdateCampaignDto {
@@ -70,6 +77,7 @@ class UpdateCampaignDto {
   @IsOptional() @IsString() imageUrl?: string;
   @IsOptional() @IsArray() actions?: unknown[];
   @IsOptional() @IsUUID() segmentId?: string;
+  @IsOptional() @IsInt() @Min(1) pacingPerMinute?: number;
 }
 
 class ScheduleDto {
@@ -128,6 +136,7 @@ export class CampaignsController {
         imageUrl: dto.imageUrl ?? null,
         actions: (dto.actions as any) ?? undefined,
         segmentId: dto.segmentId ?? null,
+        pacingPerMinute: dto.pacingPerMinute ?? null,
       },
     });
     await this.audit(user, "campaign.create", campaign.id);

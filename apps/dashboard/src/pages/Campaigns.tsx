@@ -62,7 +62,9 @@ export default function Campaigns() {
     imageUrl: "",
     segmentId: "",
     scheduleAt: "",
+    pacing: "",
   });
+  const [audience, setAudience] = useState<number | null>(null);
 
   const load = () => {
     api<Campaign[]>("/campaigns").then(setCampaigns).catch((e) => setError(e.message));
@@ -73,6 +75,21 @@ export default function Campaigns() {
     });
   };
   useEffect(load, []);
+
+  // live audience ("leads") estimate for the composer
+  useEffect(() => {
+    if (!showCreate) return;
+    setAudience(null);
+    if (form.segmentId) {
+      api<{ count: number }>(`/segments/${form.segmentId}/count`, { method: "POST" })
+        .then((r) => setAudience(r.count))
+        .catch(() => setAudience(null));
+    } else {
+      api<{ total: number }>(`/subscribers?status=active&page_size=1`)
+        .then((r) => setAudience(r.total))
+        .catch(() => setAudience(null));
+    }
+  }, [showCreate, form.segmentId]);
 
   // poll while any campaign is sending or a report modal is open
   useEffect(() => {
@@ -100,6 +117,7 @@ export default function Campaigns() {
           iconUrl: form.iconUrl || undefined,
           imageUrl: form.imageUrl || undefined,
           segmentId: form.segmentId || undefined,
+          pacingPerMinute: form.pacing ? Number(form.pacing) : undefined,
         }),
       });
       if (action === "send") {
@@ -184,6 +202,23 @@ export default function Campaigns() {
                         {new Date(c.scheduleAt).toLocaleString()}
                       </div>
                     )}
+                    {c.status === "sending" && (
+                      <div style={{ marginTop: 6, width: 120 }}>
+                        <div style={{ height: 6, background: "var(--bg-elevated)", borderRadius: 3, overflow: "hidden" }}>
+                          <div
+                            style={{
+                              height: "100%",
+                              width: `${c.totalTargeted ? Math.min(((c.totalSent + c.totalFailed + c.totalExpiredPruned) / c.totalTargeted) * 100, 100) : 5}%`,
+                              background: "var(--accent)",
+                              transition: "width 0.5s",
+                            }}
+                          />
+                        </div>
+                        <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 2 }}>
+                          {c.totalSent + c.totalFailed + c.totalExpiredPruned} / {c.totalTargeted ?? "…"} blasted
+                        </div>
+                      </div>
+                    )}
                   </td>
                   <td>{c.segment?.name ?? "All active"}</td>
                   <td>{c.totalTargeted ?? "–"}</td>
@@ -244,6 +279,28 @@ export default function Campaigns() {
                   </option>
                 ))}
               </select>
+              <div style={{ marginTop: 8, fontSize: 13 }}>
+                <span className="badge purple">
+                  {audience === null ? "counting leads…" : `${audience.toLocaleString()} leads will be targeted`}
+                </span>
+                <span style={{ color: "var(--text-dim)", fontSize: 11, marginLeft: 6 }}>
+                  before frequency caps
+                </span>
+              </div>
+              <label>Pacing (sends per minute)</label>
+              <select value={form.pacing} onChange={(e) => setForm({ ...form, pacing: e.target.value })}>
+                <option value="">Full speed (no pacing)</option>
+                <option value="60">60 / minute</option>
+                <option value="300">300 / minute</option>
+                <option value="600">600 / minute</option>
+                <option value="1200">1,200 / minute</option>
+                <option value="3000">3,000 / minute</option>
+              </select>
+              {form.pacing && audience !== null && audience > 0 && (
+                <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 4 }}>
+                  ≈ {Math.ceil(audience / Number(form.pacing))} min to complete the blast
+                </div>
+              )}
               <label>Schedule (optional)</label>
               <input type="datetime-local" value={form.scheduleAt} onChange={(e) => setForm({ ...form, scheduleAt: e.target.value })} />
               {error && <div className="error-msg">{error}</div>}

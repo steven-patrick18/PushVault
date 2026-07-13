@@ -198,6 +198,7 @@ model Campaign {
   actions            Json?
   segmentId          String?        @map("segment_id") @db.Uuid
   status             CampaignStatus @default(draft)
+  pacingPerMinute    Int?           @map("pacing_per_minute")
   scheduleAt         DateTime?      @map("schedule_at") @db.Timestamptz()
   recurrence         Json?
   abConfig           Json?          @map("ab_config")

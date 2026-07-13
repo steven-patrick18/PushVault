@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
 import { PrismaService, TenantClient } from "../../infra/prisma.service";
-import { TaskPool, sleep } from "../../queue/task-pool";
+import { RateLimiter, TaskPool, sleep } from "../../queue/task-pool";
 import { PushError, PushService } from "./push.service";
 import { compileCriteria, SegmentCriteria } from "../segments/segment-compiler";
 
@@ -80,7 +80,14 @@ export class CampaignRunnerService implements OnModuleInit {
     const db = this.prisma.forTenant(campaign.tenantId);
     await db.campaign.update({
       where: { id: campaign.id },
-      data: { status: "sending", startedAt: new Date() },
+      data: {
+        status: "sending",
+        startedAt: new Date(),
+        totalSent: 0,
+        totalDelivered: 0,
+        totalFailed: 0,
+        totalExpiredPruned: 0,
+      },
     });
 
     const segmentWhere = campaign.segment
@@ -94,6 +101,11 @@ export class CampaignRunnerService implements OnModuleInit {
       url: campaign.clickUrl,
       actions: (campaign.actions as any) ?? undefined,
     };
+
+    // pacing: spread sends evenly instead of blasting at full speed
+    const limiter = campaign.pacingPerMinute
+      ? new RateLimiter(60_000 / campaign.pacingPerMinute)
+      : null;
 
     const capDay = campaign.property.frequencyCapPerDay;
     const capWeek = campaign.property.frequencyCapPerWeek;
@@ -152,10 +164,15 @@ export class CampaignRunnerService implements OnModuleInit {
         const send = sendRows[i];
         const sub = eligible[i];
         pool.add(() =>
-          this.processSend(db, campaign.id, campaign.tenantId, send.id, sub, {
-            ...basePayload,
-            send_id: send.id,
-          }),
+          this.processSend(
+            db,
+            campaign.id,
+            campaign.tenantId,
+            send.id,
+            sub,
+            { ...basePayload, send_id: send.id },
+            limiter,
+          ),
         );
       }
     }
@@ -224,8 +241,10 @@ export class CampaignRunnerService implements OnModuleInit {
     sendId: string,
     sub: { id: string; endpoint: string; p256dh: string; auth: string },
     payload: any,
+    limiter: RateLimiter | null = null,
   ): Promise<void> {
     try {
+      if (limiter) await limiter.wait();
       let attempt = 0;
       for (;;) {
         attempt++;
@@ -249,6 +268,11 @@ export class CampaignRunnerService implements OnModuleInit {
         where: { id: sub.id },
         data: { pushesReceived: { increment: 1 }, lastPushAt: now },
       });
+      // live progress for the dashboard while the blast is running
+      await db.campaign.update({
+        where: { id: campaignId },
+        data: { totalSent: { increment: 1 }, totalDelivered: { increment: 1 } },
+      });
     } catch (e) {
       const code = e instanceof PushError ? e.statusCode : null;
       if (code === 404 || code === 410) {
@@ -261,10 +285,18 @@ export class CampaignRunnerService implements OnModuleInit {
           where: { id: sub.id },
           data: { status: "expired" },
         });
+        await db.campaign.update({
+          where: { id: campaignId },
+          data: { totalExpiredPruned: { increment: 1 } },
+        });
       } else {
         await db.send.update({
           where: { id: sendId },
           data: { status: "failed", errorCode: code ? String(code) : "error" },
+        });
+        await db.campaign.update({
+          where: { id: campaignId },
+          data: { totalFailed: { increment: 1 } },
         });
       }
     } finally {
