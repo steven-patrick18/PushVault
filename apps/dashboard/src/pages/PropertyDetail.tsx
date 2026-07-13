@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams, Link } from "react-router-dom";
 import { api } from "../api";
 
@@ -56,6 +56,40 @@ export default function PropertyDetail() {
   const [error, setError] = useState("");
   const [guide, setGuide] = useState<"html" | "wordpress" | "shopify">("html");
   const [previewDevice, setPreviewDevice] = useState<"desktop" | "mobile">("desktop");
+  const viewportRef = useRef<HTMLDivElement | null>(null);
+  const [dragY, setDragY] = useState<number | null>(null);
+
+  // drag the banner on the mockup; drop in the top or bottom half to place it
+  function startBannerDrag(e: React.MouseEvent) {
+    e.preventDefault();
+    const move = (ev: MouseEvent) => {
+      const rect = viewportRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setDragY(Math.min(Math.max(ev.clientY - rect.top, 10), rect.height - 30));
+    };
+    const up = (ev: MouseEvent) => {
+      const rect = viewportRef.current?.getBoundingClientRect();
+      if (rect) {
+        const y = ev.clientY - rect.top;
+        setCfg((c) => ({
+          ...c,
+          style: { ...c.style, position: y < rect.height / 2 ? "top" : "bottom" },
+        }));
+      }
+      setDragY(null);
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  }
+
+  const SIZE_STEPS = ["compact", "normal", "large"] as const;
+  function stepSize(dir: 1 | -1) {
+    const i = SIZE_STEPS.indexOf((cfg.style.size ?? "normal") as (typeof SIZE_STEPS)[number]);
+    const next = SIZE_STEPS[Math.min(SIZE_STEPS.length - 1, Math.max(0, i + dir))];
+    setCfg({ ...cfg, style: { ...cfg.style, size: next } });
+  }
 
   const load = useCallback(() => {
     api<Property>(`/properties/${id}`).then((p) => {
@@ -422,11 +456,21 @@ export default function PropertyDetail() {
             {(() => {
               const banner = (scale: number) => (
                 <div
+                  onMouseDown={startBannerDrag}
+                  title="Drag me — drop in the top or bottom half of the page"
                   style={{
                     position: "absolute",
                     left: 8,
                     right: 8,
-                    ...(cfg.style.position === "bottom" ? { bottom: 8 } : { top: previewDevice === "desktop" ? 8 : 42 }),
+                    cursor: dragY !== null ? "grabbing" : "grab",
+                    userSelect: "none",
+                    outline: dragY !== null ? `2px dashed ${cfg.style.accent}` : undefined,
+                    outlineOffset: 3,
+                    ...(dragY !== null
+                      ? { top: dragY - 16 }
+                      : cfg.style.position === "bottom"
+                        ? { bottom: 8 }
+                        : { top: 8 }),
                     display: "flex",
                     alignItems: "center",
                     gap: 8 * scale,
@@ -447,6 +491,37 @@ export default function PropertyDetail() {
                     <span style={{ background: "#f5f5f7", color: "#333", border: "1px solid #ddd", borderRadius: 7, padding: `${5 * scale * sizeScale}px ${9 * scale * sizeScale}px`, fontWeight: 600, whiteSpace: "nowrap" }}>{cfg.text.no || "No"}</span>
                     <span style={{ color: "#999", padding: `${5 * scale * sizeScale}px 3px` }}>✕</span>
                   </span>
+                </div>
+              );
+
+              const chip = (label: string, onClick: () => void, active = false, tip = "") => (
+                <button
+                  type="button"
+                  title={tip}
+                  onMouseDown={(e) => e.stopPropagation()}
+                  onClick={onClick}
+                  style={{
+                    background: active ? cfg.style.accent : "rgba(20,20,28,.85)",
+                    color: "#fff",
+                    border: "none",
+                    borderRadius: 6,
+                    padding: "3px 8px",
+                    fontSize: 11,
+                    fontWeight: 700,
+                    cursor: "pointer",
+                  }}
+                >
+                  {label}
+                </button>
+              );
+
+              // on-screen placement + resize controls, overlaid on the mockup
+              const overlayControls = (
+                <div style={{ position: "absolute", top: 6, right: 6, zIndex: 10, display: "flex", gap: 4 }}>
+                  {chip("▲", () => setCfg({ ...cfg, style: { ...cfg.style, position: "top" } }), cfg.style.position !== "bottom", "Place at top")}
+                  {chip("▼", () => setCfg({ ...cfg, style: { ...cfg.style, position: "bottom" } }), cfg.style.position === "bottom", "Place at bottom")}
+                  {chip("A−", () => stepSize(-1), false, "Smaller banner")}
+                  {chip("A+", () => stepSize(1), false, "Bigger banner")}
                 </div>
               );
 
@@ -499,18 +574,19 @@ export default function PropertyDetail() {
                       </div>
                     </div>
                     {/* viewport */}
-                    <div style={{ position: "relative", background: "#fafafa", height: 250, overflow: "hidden" }}>
+                    <div ref={viewportRef} style={{ position: "relative", background: "#fafafa", height: 250, overflow: "hidden" }}>
                       {pageSkeleton}
                       {banner(1)}
+                      {overlayControls}
                     </div>
                   </div>
                 );
               }
               return (
                 <div style={{ display: "flex", justifyContent: "center", marginTop: 10 }}>
-                  <div style={{ width: 240, height: 470, borderRadius: 30, border: "8px solid #1c1e22", background: "#fafafa", position: "relative", overflow: "hidden", boxShadow: "0 16px 44px rgba(0,0,0,.45)" }}>
+                  <div style={{ width: 240, height: 470, borderRadius: 30, border: "8px solid #1c1e22", background: "#fafafa", position: "relative", overflow: "hidden", boxShadow: "0 16px 44px rgba(0,0,0,.45)", display: "flex", flexDirection: "column" }}>
                     {/* mobile browser bar */}
-                    <div style={{ background: "#202124", padding: "8px 10px 6px" }}>
+                    <div style={{ background: "#202124", padding: "8px 10px 6px", flexShrink: 0 }}>
                       <div style={{ display: "flex", justifyContent: "space-between", color: "#ccc", fontSize: 8, marginBottom: 5 }}>
                         <span>9:41</span>
                         <span>📶 🔋</span>
@@ -519,17 +595,20 @@ export default function PropertyDetail() {
                         🔒 {property.domains[0]}
                       </div>
                     </div>
-                    <div style={{ position: "relative", height: "100%" }}>
+                    {/* viewport: its own box so a bottom-placed banner stays fully visible */}
+                    <div ref={viewportRef} style={{ position: "relative", flex: 1, overflow: "hidden" }}>
                       {pageSkeleton}
                       {banner(0.92)}
+                      {overlayControls}
                     </div>
-                    <div style={{ position: "absolute", bottom: 5, left: "50%", transform: "translateX(-50%)", width: 80, height: 4, borderRadius: 2, background: "rgba(0,0,0,.3)" }} />
+                    <div style={{ position: "absolute", bottom: 3, left: "50%", transform: "translateX(-50%)", width: 80, height: 4, borderRadius: 2, background: "rgba(0,0,0,.3)", zIndex: 20 }} />
                   </div>
                 </div>
               );
             })()}
 
             <div className="preview-note" style={{ maxWidth: "100%", textAlign: "center" }}>
+              ✋ <b>Drag the banner</b> to place it (top/bottom half), or use ▲ ▼ and A− A+ on the preview.
               Appears{" "}
               {cfg.trigger.type === "delay"
                 ? `${cfg.trigger.seconds ?? 12}s after page load`
@@ -537,6 +616,7 @@ export default function PropertyDetail() {
                   ? `after scrolling ${cfg.trigger.percent ?? 40}%`
                   : "on exit intent"}{" "}
               · {cfg.style.position} of page · size {cfg.style.size ?? "normal"} · never blocks the page content.
+              Remember to hit <b>Save prompt settings</b>.
             </div>
           </div>
         </div>
