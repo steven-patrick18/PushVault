@@ -55,6 +55,7 @@ export default function PropertyDetail() {
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
   const [guide, setGuide] = useState<"html" | "wordpress" | "shopify">("html");
+  const [previewDevice, setPreviewDevice] = useState<"desktop" | "mobile">("desktop");
 
   const load = useCallback(() => {
     api<Property>(`/properties/${id}`).then((p) => {
@@ -408,43 +409,134 @@ export default function PropertyDetail() {
             </button>
           </div>
 
-          {/* live preview */}
-          <div style={{ width: 340 }}>
-            <label>Live preview</label>
-            <div style={{ background: "#e8eaf0", borderRadius: 12, padding: "14px 10px", minHeight: 220, display: "flex", flexDirection: "column", justifyContent: cfg.style.position === "bottom" ? "flex-end" : "flex-start" }}>
-              <div
-                style={{
-                  display: "flex",
-                  alignItems: "center",
-                  gap: 10 * sizeScale,
-                  background: "#fff",
-                  color: "#1a1a2a",
-                  borderRadius: 12,
-                  padding: `${12 * sizeScale}px ${16 * sizeScale}px`,
-                  boxShadow: "0 4px 24px rgba(0,0,0,.18)",
-                  fontSize: 14 * sizeScale,
-                }}
-              >
-                {cfg.style.logo && <img src={cfg.style.logo} style={{ width: 28 * sizeScale, height: 28 * sizeScale, borderRadius: 6 }} />}
-                <span style={{ flex: 1, fontWeight: 600 }}>{cfg.text.headline}</span>
+          {/* live preview — realistic browser/phone mockups */}
+          <div style={{ width: 480 }}>
+            <div className="flex-between">
+              <label>Live preview — how visitors see it on {property.domains[0]}</label>
+              <div style={{ display: "flex", gap: 4 }}>
+                <button type="button" className={"btn small " + (previewDevice === "desktop" ? "" : "secondary")} onClick={() => setPreviewDevice("desktop")}>🖥 Desktop</button>
+                <button type="button" className={"btn small " + (previewDevice === "mobile" ? "" : "secondary")} onClick={() => setPreviewDevice("mobile")}>📱 Mobile</button>
               </div>
-              <div style={{ display: "flex", gap: 8, marginTop: 8, justifyContent: "flex-end" }}>
-                <button style={{ background: cfg.style.accent, color: "#fff", border: "none", borderRadius: 8, padding: `${8 * sizeScale}px ${14 * sizeScale}px`, fontWeight: 600, fontSize: 13 * sizeScale }}>
-                  {cfg.text.yes}
-                </button>
-                <button style={{ background: "#f5f5f7", color: "#333", border: "1px solid #ddd", borderRadius: 8, padding: `${8 * sizeScale}px ${14 * sizeScale}px`, fontWeight: 600, fontSize: 13 * sizeScale }}>
-                  {cfg.text.no}
-                </button>
-              </div>
-              <div style={{ fontSize: 11, color: "#667", marginTop: 12, textAlign: "center" }}>
-                trigger:{" "}
-                {cfg.trigger.type === "delay"
-                  ? `${cfg.trigger.seconds ?? 12}s after load`
-                  : cfg.trigger.type === "scroll"
-                    ? `${cfg.trigger.percent ?? 40}% scrolled`
-                    : "exit intent"}{" "}
-                · {cfg.style.position} · {cfg.style.size ?? "normal"}
-              </div>
+            </div>
+
+            {(() => {
+              const banner = (scale: number) => (
+                <div
+                  style={{
+                    position: "absolute",
+                    left: 8,
+                    right: 8,
+                    ...(cfg.style.position === "bottom" ? { bottom: 8 } : { top: previewDevice === "desktop" ? 8 : 42 }),
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8 * scale,
+                    flexWrap: "wrap",
+                    background: "#fff",
+                    color: "#1a1a2a",
+                    borderRadius: 10,
+                    padding: `${9 * scale * sizeScale}px ${12 * scale * sizeScale}px`,
+                    boxShadow: "0 4px 20px rgba(0,0,0,.25)",
+                    fontSize: 11.5 * scale * sizeScale,
+                    zIndex: 5,
+                  }}
+                >
+                  {cfg.style.logo && <img src={cfg.style.logo} style={{ width: 20 * scale * sizeScale, height: 20 * scale * sizeScale, borderRadius: 5, objectFit: "cover" }} />}
+                  <span style={{ flex: 1, fontWeight: 600, minWidth: 90 }}>{cfg.text.headline || "Get notified?"}</span>
+                  <span style={{ display: "flex", gap: 5 }}>
+                    <span style={{ background: cfg.style.accent, color: "#fff", borderRadius: 7, padding: `${5 * scale * sizeScale}px ${9 * scale * sizeScale}px`, fontWeight: 600, whiteSpace: "nowrap" }}>{cfg.text.yes || "Yes"}</span>
+                    <span style={{ background: "#f5f5f7", color: "#333", border: "1px solid #ddd", borderRadius: 7, padding: `${5 * scale * sizeScale}px ${9 * scale * sizeScale}px`, fontWeight: 600, whiteSpace: "nowrap" }}>{cfg.text.no || "No"}</span>
+                    <span style={{ color: "#999", padding: `${5 * scale * sizeScale}px 3px` }}>✕</span>
+                  </span>
+                </div>
+              );
+
+              const pageSkeleton = (
+                <>
+                  {/* fake store page */}
+                  <div style={{ background: "#10213f", height: 26, display: "flex", alignItems: "center", padding: "0 10px", gap: 8 }}>
+                    <span style={{ color: "#fff", fontSize: 9, fontWeight: 700 }}>⚡ {property.name}</span>
+                    <span style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
+                      {[24, 30, 26].map((w, i) => <span key={i} style={{ width: w, height: 5, borderRadius: 3, background: "rgba(255,255,255,.35)" }} />)}
+                    </span>
+                  </div>
+                  <div style={{ background: "linear-gradient(120deg,#10213f,#2b4a8b)", padding: "14px 10px", textAlign: "center" }}>
+                    <div style={{ width: "55%", height: 9, borderRadius: 4, background: "rgba(255,255,255,.85)", margin: "0 auto" }} />
+                    <div style={{ width: "38%", height: 6, borderRadius: 3, background: "rgba(255,255,255,.4)", margin: "7px auto 0" }} />
+                  </div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 7, padding: 10 }}>
+                    {[0, 1, 2, 3, 4, 5].map((i) => (
+                      <div key={i} style={{ background: "#fff", border: "1px solid #e5e5ea", borderRadius: 6, overflow: "hidden" }}>
+                        <div style={{ height: 26, background: "#eef0f6", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 12 }}>{["🎧", "⌚", "🔊", "📷", "🖱️", "⌨️"][i]}</div>
+                        <div style={{ padding: 5 }}>
+                          <div style={{ width: "80%", height: 4, borderRadius: 2, background: "#d9dce3" }} />
+                          <div style={{ width: "45%", height: 4, borderRadius: 2, background: "#c3c9d4", marginTop: 4 }} />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              );
+
+              if (previewDevice === "desktop") {
+                return (
+                  <div style={{ borderRadius: 10, overflow: "hidden", border: "1px solid #333", boxShadow: "0 14px 40px rgba(0,0,0,.4)", marginTop: 10 }}>
+                    {/* browser chrome */}
+                    <div style={{ background: "#202124", padding: "6px 10px 0", display: "flex", gap: 6, alignItems: "flex-end" }}>
+                      <span style={{ display: "flex", gap: 5, paddingBottom: 8, paddingRight: 4 }}>
+                        <span style={{ width: 9, height: 9, borderRadius: "50%", background: "#ff5f57" }} />
+                        <span style={{ width: 9, height: 9, borderRadius: "50%", background: "#febc2e" }} />
+                        <span style={{ width: 9, height: 9, borderRadius: "50%", background: "#28c840" }} />
+                      </span>
+                      <div style={{ background: "#35363a", color: "#ddd", borderRadius: "8px 8px 0 0", padding: "5px 14px", fontSize: 10, display: "flex", gap: 6, alignItems: "center" }}>
+                        <span>⚡</span> {property.name}
+                        <span style={{ color: "#888", marginLeft: 8 }}>✕</span>
+                      </div>
+                    </div>
+                    <div style={{ background: "#35363a", padding: "5px 10px", display: "flex", gap: 8, alignItems: "center" }}>
+                      <span style={{ color: "#aaa", fontSize: 11 }}>← → ⟳</span>
+                      <div style={{ flex: 1, background: "#202124", borderRadius: 999, padding: "4px 12px", fontSize: 10, color: "#ccc" }}>
+                        🔒 {property.domains[0]}
+                      </div>
+                    </div>
+                    {/* viewport */}
+                    <div style={{ position: "relative", background: "#fafafa", height: 250, overflow: "hidden" }}>
+                      {pageSkeleton}
+                      {banner(1)}
+                    </div>
+                  </div>
+                );
+              }
+              return (
+                <div style={{ display: "flex", justifyContent: "center", marginTop: 10 }}>
+                  <div style={{ width: 240, height: 470, borderRadius: 30, border: "8px solid #1c1e22", background: "#fafafa", position: "relative", overflow: "hidden", boxShadow: "0 16px 44px rgba(0,0,0,.45)" }}>
+                    {/* mobile browser bar */}
+                    <div style={{ background: "#202124", padding: "8px 10px 6px" }}>
+                      <div style={{ display: "flex", justifyContent: "space-between", color: "#ccc", fontSize: 8, marginBottom: 5 }}>
+                        <span>9:41</span>
+                        <span>📶 🔋</span>
+                      </div>
+                      <div style={{ background: "#35363a", borderRadius: 999, padding: "4px 10px", fontSize: 9, color: "#ccc" }}>
+                        🔒 {property.domains[0]}
+                      </div>
+                    </div>
+                    <div style={{ position: "relative", height: "100%" }}>
+                      {pageSkeleton}
+                      {banner(0.92)}
+                    </div>
+                    <div style={{ position: "absolute", bottom: 5, left: "50%", transform: "translateX(-50%)", width: 80, height: 4, borderRadius: 2, background: "rgba(0,0,0,.3)" }} />
+                  </div>
+                </div>
+              );
+            })()}
+
+            <div className="preview-note" style={{ maxWidth: "100%", textAlign: "center" }}>
+              Appears{" "}
+              {cfg.trigger.type === "delay"
+                ? `${cfg.trigger.seconds ?? 12}s after page load`
+                : cfg.trigger.type === "scroll"
+                  ? `after scrolling ${cfg.trigger.percent ?? 40}%`
+                  : "on exit intent"}{" "}
+              · {cfg.style.position} of page · size {cfg.style.size ?? "normal"} · never blocks the page content.
             </div>
           </div>
         </div>
