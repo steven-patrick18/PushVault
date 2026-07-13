@@ -2,6 +2,9 @@ packages:
   - "apps/*"
   - "packages/*"
 
+# the lockfile is our supply-chain trust source; don't reject fresh releases
+minimumReleaseAge: 0
+
 onlyBuiltDependencies:
   - "@prisma/client"
   - "@prisma/engines"
