@@ -5,6 +5,8 @@ import Login from "./pages/Login";
 import Overview from "./pages/Overview";
 import Properties from "./pages/Properties";
 import Subscribers from "./pages/Subscribers";
+import Segments from "./pages/Segments";
+import Campaigns from "./pages/Campaigns";
 import Updates from "./pages/Updates";
 import Placeholder from "./pages/Placeholder";
 
@@ -27,14 +29,8 @@ export default function App() {
         <Route index element={<Overview />} />
         <Route path="properties" element={<Properties />} />
         <Route path="subscribers" element={<Subscribers />} />
-        <Route
-          path="segments"
-          element={<Placeholder title="Segments" milestone="M3 — Send engine" />}
-        />
-        <Route
-          path="campaigns"
-          element={<Placeholder title="Campaigns" milestone="M3 — Send engine" />}
-        />
+        <Route path="segments" element={<Segments />} />
+        <Route path="campaigns" element={<Campaigns />} />
         <Route path="updates" element={<Updates />} />
         <Route
           path="settings"

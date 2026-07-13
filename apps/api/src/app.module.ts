@@ -5,6 +5,7 @@ import { AuthModule } from "./modules/auth/auth.module";
 import { PropertiesModule } from "./modules/properties/properties.module";
 import { UpdatesModule } from "./modules/updates/updates.module";
 import { PublicModule } from "./modules/public/public.module";
+import { CampaignsModule } from "./modules/campaigns/campaigns.module";
 import { SubscribersController } from "./modules/subscribers/subscribers.controller";
 import { DashboardController } from "./modules/dashboard/dashboard.controller";
 import { Controller, Get } from "@nestjs/common";
@@ -29,6 +30,7 @@ class HealthController {
     PropertiesModule,
     UpdatesModule,
     PublicModule,
+    CampaignsModule,
   ],
   controllers: [HealthController, DashboardController, SubscribersController],
   providers: [PrismaService],
