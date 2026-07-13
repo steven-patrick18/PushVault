@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { api } from "../api";
 
 interface Campaign {
@@ -45,6 +46,7 @@ const STATUS_BADGE: Record<string, string> = {
 };
 
 export default function Campaigns() {
+  const navigate = useNavigate();
   const [campaigns, setCampaigns] = useState<Campaign[]>([]);
   const [segments, setSegments] = useState<{ id: string; name: string }[]>([]);
   const [properties, setProperties] = useState<{ id: string; name: string }[]>([]);
@@ -79,16 +81,13 @@ export default function Campaigns() {
   // live audience ("leads") estimate for the composer
   useEffect(() => {
     if (!showCreate) return;
+    let stale = false;
     setAudience(null);
-    if (form.segmentId) {
-      api<{ count: number }>(`/segments/${form.segmentId}/count`, { method: "POST" })
-        .then((r) => setAudience(r.count))
-        .catch(() => setAudience(null));
-    } else {
-      api<{ total: number }>(`/subscribers?status=active&page_size=1`)
-        .then((r) => setAudience(r.total))
-        .catch(() => setAudience(null));
-    }
+    const promise = form.segmentId
+      ? api<{ count: number }>(`/segments/${form.segmentId}/count`, { method: "POST" }).then((r) => r.count)
+      : api<{ total: number }>(`/subscribers?status=active&page_size=1`).then((r) => r.total);
+    promise.then((n) => { if (!stale) setAudience(n); }).catch(() => {});
+    return () => { stale = true; };
   }, [showCreate, form.segmentId]);
 
   // poll while any campaign is sending or a report modal is open
@@ -190,9 +189,13 @@ export default function Campaigns() {
             </thead>
             <tbody>
               {campaigns.map((c) => (
-                <tr key={c.id}>
+                <tr
+                  key={c.id}
+                  style={{ cursor: "pointer" }}
+                  onClick={() => navigate(`/campaigns/${c.id}`)}
+                >
                   <td>
-                    {c.name}
+                    <span style={{ color: "var(--accent-hover)", fontWeight: 600 }}>{c.name}</span>
                     <div style={{ fontSize: 12, color: "var(--text-dim)" }}>{c.title}</div>
                   </td>
                   <td>
@@ -225,7 +228,7 @@ export default function Campaigns() {
                   <td>{c.totalSent}</td>
                   <td>{c.totalClicked}</td>
                   <td>{c.totalExpiredPruned}</td>
-                  <td>
+                  <td onClick={(e) => e.stopPropagation()}>
                     <div className="row-actions">
                       {c.status === "draft" && (
                         <button className="btn small" onClick={() => sendNow(c.id)}>
@@ -237,8 +240,8 @@ export default function Campaigns() {
                           Cancel
                         </button>
                       )}
-                      <button className="btn secondary small" onClick={() => openReport(c.id)}>
-                        Report
+                      <button className="btn secondary small" onClick={() => navigate(`/campaigns/${c.id}`)}>
+                        Manage
                       </button>
                     </div>
                   </td>

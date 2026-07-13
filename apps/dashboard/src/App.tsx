@@ -9,6 +9,7 @@ import Settings from "./pages/Settings";
 import Subscribers from "./pages/Subscribers";
 import Segments from "./pages/Segments";
 import Campaigns from "./pages/Campaigns";
+import CampaignDetail from "./pages/CampaignDetail";
 import Updates from "./pages/Updates";
 import Placeholder from "./pages/Placeholder";
 
@@ -34,6 +35,7 @@ export default function App() {
         <Route path="subscribers" element={<Subscribers />} />
         <Route path="segments" element={<Segments />} />
         <Route path="campaigns" element={<Campaigns />} />
+        <Route path="campaigns/:id" element={<CampaignDetail />} />
         <Route path="updates" element={<Updates />} />
         <Route path="settings" element={<Settings />} />
       </Route>

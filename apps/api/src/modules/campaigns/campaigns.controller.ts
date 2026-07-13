@@ -20,6 +20,7 @@ import {
   IsUUID,
   Min,
   MinLength,
+  ValidateIf,
 } from "class-validator";
 import { randomUUID } from "node:crypto";
 import { PrismaService } from "../../infra/prisma.service";
@@ -76,8 +77,10 @@ class UpdateCampaignDto {
   @IsOptional() @IsString() iconUrl?: string;
   @IsOptional() @IsString() imageUrl?: string;
   @IsOptional() @IsArray() actions?: unknown[];
-  @IsOptional() @IsUUID() segmentId?: string;
-  @IsOptional() @IsInt() @Min(1) pacingPerMinute?: number;
+  // null = unassign segment (target all active subscribers)
+  @IsOptional() @ValidateIf((_, v) => v !== null) @IsUUID() segmentId?: string | null;
+  // null = full speed
+  @IsOptional() @ValidateIf((_, v) => v !== null) @IsInt() @Min(1) pacingPerMinute?: number | null;
 }
 
 class ScheduleDto {
