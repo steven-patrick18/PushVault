@@ -20,6 +20,34 @@ const DEFAULT_PROMPT_CONFIG = {
   reask: { enabled: false, cooldown_days: 7 },
 };
 
+/**
+ * Origin validation and verification compare against a bare host
+ * (`example.com` or `example.com:8443`). Users naturally paste
+ * `https://example.com/` — strip the scheme, path, trailing slash, and
+ * lowercase so those inputs still match. Drops `www.` duplicates handled
+ * by the caller keeping both if they were entered separately.
+ */
+export function normalizeDomain(input: string): string {
+  let d = (input ?? "").trim().toLowerCase();
+  d = d.replace(/^https?:\/\//, ""); // scheme
+  d = d.replace(/\/.*$/, ""); // path / trailing slash
+  d = d.replace(/^\*+\.?/, ""); // stray wildcards
+  return d;
+}
+
+function normalizeDomains(domains: string[]): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const raw of domains ?? []) {
+    const d = normalizeDomain(raw);
+    if (d && !seen.has(d)) {
+      seen.add(d);
+      out.push(d);
+    }
+  }
+  return out;
+}
+
 @Injectable()
 export class PropertiesService {
   constructor(private readonly prisma: PrismaService) {}
@@ -45,11 +73,15 @@ export class PropertiesService {
   async create(user: AuthUser, data: { name: string; domains: string[]; iconUrl?: string }) {
     const propertyKey = generateKey("pk_live");
     const apiKey = generateKey("sk_live");
+    const domains = normalizeDomains(data.domains);
+    if (domains.length === 0) {
+      throw new BadRequestException("At least one valid domain is required");
+    }
     const property = await this.db(user).property.create({
       data: {
         tenantId: user.tenantId,
         name: data.name,
-        domains: data.domains,
+        domains,
         iconUrl: data.iconUrl ?? null,
         propertyKey,
         promptConfig: DEFAULT_PROMPT_CONFIG,
@@ -79,9 +111,16 @@ export class PropertiesService {
   ) {
     const before = await this.db(user).property.findUnique({ where: { id } });
     if (!before) throw new NotFoundException("Property not found");
+    const patch: any = { ...data };
+    if (data.domains) {
+      patch.domains = normalizeDomains(data.domains);
+      if (patch.domains.length === 0) {
+        throw new BadRequestException("At least one valid domain is required");
+      }
+    }
     const property = await this.db(user).property.update({
       where: { id },
-      data: data as any,
+      data: patch,
     });
     await this.audit(user, "property.update", id, { name: before.name }, data);
     return this.serialize(property);

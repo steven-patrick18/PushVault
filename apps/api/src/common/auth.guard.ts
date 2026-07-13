@@ -3,6 +3,7 @@ import {
   ExecutionContext,
   ForbiddenException,
   Injectable,
+  NotFoundException,
   UnauthorizedException,
   createParamDecorator,
 } from "@nestjs/common";
@@ -26,6 +27,17 @@ const OPERATOR_ALLOWED_WRITES =
 export function propertyScope(user: AuthUser): Record<string, unknown> {
   if (user.role !== "client") return {};
   return { propertyId: { in: user.propertyIds } };
+}
+
+/**
+ * Per-id authorization for single-resource GETs: RLS only isolates by tenant,
+ * so a client user must be additionally checked against their property list.
+ * Throws 404 (not 403) so scoped users can't probe which ids exist.
+ */
+export function assertPropertyAccess(user: AuthUser, propertyId: string): void {
+  if (user.role === "client" && !user.propertyIds.includes(propertyId)) {
+    throw new NotFoundException("Not found");
+  }
 }
 
 @Injectable()

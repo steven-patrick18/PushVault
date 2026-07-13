@@ -35,15 +35,26 @@ export interface SegmentCriteria {
 /**
  * Full audience `where`: (filter matches OR manually added) AND NOT manually removed.
  * This is what counting, sending and member listing must all use.
+ *
+ * Empty filter semantics:
+ *  - no conditions AND no manual includes → {} (all active — the "everyone" bucket)
+ *  - no conditions BUT manual includes present → JUST those leads.
+ *    (Auto-assign and manual-assign write only manual_include, so a filterless
+ *     bucket must resolve to its members, not silently to the whole property.)
  */
 export function segmentAudienceWhere(criteria: SegmentCriteria): Record<string, any> {
   const base = compileCriteria(criteria);
+  const hasFilter = Object.keys(base).length > 0;
   const include = criteria?.manual_include ?? [];
   const exclude = criteria?.manual_exclude ?? [];
-  let where: Record<string, any> = base;
-  if (include.length > 0) {
-    where = Object.keys(base).length > 0 ? { OR: [base, { id: { in: include } }] } : base;
-    // with an empty filter everything matches anyway; includes only matter with a filter
+
+  let where: Record<string, any>;
+  if (hasFilter) {
+    where = include.length > 0 ? { OR: [base, { id: { in: include } }] } : base;
+  } else if (include.length > 0) {
+    where = { id: { in: include } }; // manual-only bucket → exactly its members
+  } else {
+    where = {}; // no filter, no members → everyone (explicit "all" bucket)
   }
   if (exclude.length > 0) {
     where = { AND: [where, { id: { notIn: exclude } }] };

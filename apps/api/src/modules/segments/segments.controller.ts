@@ -13,7 +13,7 @@ import {
 } from "@nestjs/common";
 import { IsBoolean, IsObject, IsOptional, IsString, IsUUID, MinLength } from "class-validator";
 import { PrismaService } from "../../infra/prisma.service";
-import { AuthUser, CurrentUser, JwtAuthGuard, propertyScope } from "../../common/auth.guard";
+import { AuthUser, CurrentUser, JwtAuthGuard, propertyScope, assertPropertyAccess } from "../../common/auth.guard";
 import { compileCriteria, segmentAudienceWhere, SegmentCriteria } from "./segment-compiler";
 import { SubscriberFilterParams, buildSubscriberWhere } from "../../common/subscriber-filters";
 import { MembershipService } from "./membership.service";
@@ -142,6 +142,7 @@ export class SegmentsController {
       include: { property: { select: { id: true, name: true } } },
     });
     if (!segment) throw new NotFoundException("Segment not found");
+    assertPropertyAccess(user, segment.propertyId);
     return segment;
   }
 
@@ -173,6 +174,7 @@ export class SegmentsController {
     const db = this.db(user);
     const segment = await db.segment.findUnique({ where: { id } });
     if (!segment) throw new NotFoundException("Segment not found");
+    assertPropertyAccess(user, segment.propertyId);
     const criteria = segment.criteria as SegmentCriteria;
     const where = {
       ...segmentAudienceWhere(criteria),
@@ -216,6 +218,7 @@ export class SegmentsController {
     const db = this.db(user);
     const segment = await db.segment.findUnique({ where: { id } });
     if (!segment) throw new NotFoundException("Segment not found");
+    assertPropertyAccess(user, segment.propertyId);
     const audience = segmentAudienceWhere(segment.criteria as SegmentCriteria);
     const where: any = {
       propertyId: segment.propertyId,
@@ -337,6 +340,7 @@ export class SegmentsController {
     const db = this.db(user);
     const segment = await db.segment.findUnique({ where: { id } });
     if (!segment) throw new NotFoundException("Segment not found");
+    assertPropertyAccess(user, segment.propertyId);
     const audience = segmentAudienceWhere(segment.criteria as SegmentCriteria);
     const since = new Date(Date.now() - ACTIVITY_WINDOWS[ACTIVITY_WINDOWS.length - 1].minutes * 60_000);
 

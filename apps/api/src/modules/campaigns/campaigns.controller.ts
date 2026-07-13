@@ -27,7 +27,7 @@ import {
 } from "class-validator";
 import { randomUUID } from "node:crypto";
 import { PrismaService } from "../../infra/prisma.service";
-import { AuthUser, CurrentUser, JwtAuthGuard, propertyScope } from "../../common/auth.guard";
+import { AuthUser, CurrentUser, JwtAuthGuard, propertyScope, assertPropertyAccess } from "../../common/auth.guard";
 import { CampaignRunnerService } from "./campaign-runner.service";
 import { PushService, PushError } from "./push.service";
 import { describeRecurrence, isRecurrence } from "./recurrence";
@@ -96,8 +96,9 @@ class UpdateCampaignDto {
   @IsOptional() @IsString() title?: string;
   @IsOptional() @IsString() body?: string;
   @IsOptional() @IsString() clickUrl?: string;
-  @IsOptional() @IsString() iconUrl?: string;
-  @IsOptional() @IsString() imageUrl?: string;
+  // null clears the icon/image (empty field in the designer)
+  @IsOptional() @ValidateIf((_, v) => v !== null) @IsString() iconUrl?: string | null;
+  @IsOptional() @ValidateIf((_, v) => v !== null) @IsString() imageUrl?: string | null;
   @IsOptional() @IsArray() actions?: unknown[];
   @IsOptional() @IsArray() @IsUUID(undefined, { each: true }) segmentIds?: string[];
   @IsOptional() @IsIn(["mixed", "sequential", "zone"]) mixStrategy?: string;
@@ -155,6 +156,7 @@ export class CampaignsController {
       include: { segment: { select: { id: true, name: true } } },
     });
     if (!campaign) throw new NotFoundException("Campaign not found");
+    assertPropertyAccess(user, campaign.propertyId);
     return campaign;
   }
 
@@ -284,10 +286,11 @@ export class CampaignsController {
       where: { id },
       select: {
         status: true, startedAt: true, finishedAt: true, pacingPerMinute: true,
-        totalTargeted: true, name: true, scheduleAt: true,
+        totalTargeted: true, name: true, scheduleAt: true, propertyId: true,
       },
     });
     if (!campaign) throw new NotFoundException("Campaign not found");
+    assertPropertyAccess(user, campaign.propertyId);
     const minuteAgo = new Date(Date.now() - 60_000);
     const [statusCounts, clicked, sentLastMin] = await Promise.all([
       db.send.groupBy({ by: ["status"], where: { campaignId: id }, _count: { status: true } }),
@@ -422,8 +425,9 @@ export class CampaignsController {
     @Query("page_size") pageSize = "50",
   ) {
     const db = this.db(user);
-    const campaign = await db.campaign.findUnique({ where: { id }, select: { id: true } });
+    const campaign = await db.campaign.findUnique({ where: { id }, select: { id: true, propertyId: true } });
     if (!campaign) throw new NotFoundException("Campaign not found");
+    assertPropertyAccess(user, campaign.propertyId);
     const tenant = await db.tenant.findUnique({
       where: { id: user.tenantId },
       select: { billingRates: true },
@@ -486,6 +490,7 @@ export class CampaignsController {
       include: { segment: { select: { name: true } } },
     });
     if (!campaign) throw new NotFoundException("Campaign not found");
+    assertPropertyAccess(user, campaign.propertyId);
 
     const [statusCounts, errorCounts, clicked, variantSent, variantClicked, revenue] =
       await Promise.all([

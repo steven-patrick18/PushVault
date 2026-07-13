@@ -332,7 +332,7 @@ interface RemoteConfig {
   }
 
   async function init() {
-    beaconPageview();
+    // pageview is beaconed once at startup (line ~58) for all browsers
     const prior = getChoice();
     if (prior) {
       if (prior.choice === "subscribed" || prior.choice === "yes") return;

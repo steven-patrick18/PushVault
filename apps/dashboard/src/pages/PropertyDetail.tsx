@@ -192,13 +192,23 @@ export default function PropertyDetail() {
   }
 
   async function togglePage(page: PageRow) {
-    const exclude = new Set(cfg.pages.exclude);
-    if (page.allowed) exclude.add(page.path);
-    else {
-      exclude.delete(page.path);
-      // also drop any glob that blocks it exactly
+    const toRegex = (glob: string) =>
+      new RegExp(
+        "^" + glob.split("*").map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$",
+      );
+    let exclude = [...cfg.pages.exclude];
+    let include = [...(cfg.pages.include?.length ? cfg.pages.include : ["*"])];
+    if (page.allowed) {
+      // Block: add an exact exclude for this page
+      if (!exclude.includes(page.path)) exclude.push(page.path);
+    } else {
+      // Allow: drop the exact exclude AND any glob exclude that matches this
+      // page; if include list is specific and doesn't cover it, add it.
+      exclude = exclude.filter((g) => !toRegex(g).test(page.path));
+      const covered = include.some((g) => g === "*" || toRegex(g).test(page.path));
+      if (!covered) include.push(page.path);
     }
-    const next = { ...cfg, pages: { ...cfg.pages, exclude: [...exclude] } };
+    const next = { ...cfg, pages: { ...cfg.pages, include, exclude } };
     setCfg(next);
     await saveConfig(next);
   }

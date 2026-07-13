@@ -230,10 +230,14 @@ export class PublicService {
 
     const db = this.prisma.forTenant(send.tenantId);
     const now = new Date();
-    await db.send.update({
-      where: { id: send.id },
+    // atomic flip: only the FIRST click (clicked=false) wins the row, so
+    // two near-simultaneous taps can't both pass the guard and double-count
+    const claimed = await db.send.updateMany({
+      where: { id: send.id, clicked: false },
       data: { clicked: true, clickedAt: now },
     });
+    if (claimed.count === 0) return { ok: true, already: true };
+
     await db.subscriber.update({
       where: { id: send.subscriberId },
       data: { pushesClicked: { increment: 1 }, lastClickAt: now },

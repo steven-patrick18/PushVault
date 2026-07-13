@@ -48,6 +48,15 @@ export class CampaignRunnerService implements OnModuleInit {
     return next;
   }
 
+  /**
+   * True while this process is actively dispatching or draining a campaign.
+   * The maintenance sweep must NOT finalize these — a low-paced blast can
+   * legitimately run for hours, and a boot-resumed blast is mid-flight.
+   */
+  isLive(campaignId: string): boolean {
+    return this.remaining.has(campaignId) || this.paused.has(campaignId);
+  }
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly push: PushService,
@@ -203,10 +212,11 @@ export class CampaignRunnerService implements OnModuleInit {
           continue;
         }
         const payload = send.variant === "B" && variantBPayload ? variantBPayload : basePayload;
+        const actions = this.resolveActions(campaign.actions as any, requeued);
         pool.add(() =>
           this.processSend(db, campaignId, campaign.tenantId, send.id, send.subscriber, {
             ...payload,
-            actions: this.resolveActions(campaign.actions as any, requeued),
+            actions,
             send_id: send.id,
           }, limiter, vapid, epoch),
         );
@@ -452,12 +462,16 @@ export class CampaignRunnerService implements OnModuleInit {
       if (eligible.length === 0) continue;
 
       if (remainingQuota !== null) {
-        if (remainingQuota <= 0) { quotaHit = true; break; }
-        if (eligible.length > remainingQuota) {
-          eligible = eligible.slice(0, remainingQuota);
+        // re-read from the DB each batch: queued sends are inserted immediately,
+        // so this count already reflects any concurrent campaign's dispatch,
+        // shrinking the cross-campaign over-send window to at most one batch
+        const fresh = (await this.quotaRemaining(campaign.tenantId)) ?? Number.MAX_SAFE_INTEGER;
+        remainingQuota = fresh;
+        if (fresh <= 0) { quotaHit = true; break; }
+        if (eligible.length > fresh) {
+          eligible = eligible.slice(0, fresh);
           quotaHit = true;
         }
-        remainingQuota -= eligible.length;
       }
 
       const sendRows = eligible.map((s, i) => ({
@@ -475,10 +489,15 @@ export class CampaignRunnerService implements OnModuleInit {
         const send = sendRows[i];
         const sub = eligible[i];
         const payload = send.variant === "B" && variantBPayload ? variantBPayload : basePayload;
+        // snapshot NOW — the closure runs later, when `targeted` has moved on;
+        // resolving the call-pool index against the live counter collapsed
+        // round-robin routing to a single number for every deferred send
+        const actionIndex = targeted + i;
+        const actions = this.resolveActions(campaign.actions as any, actionIndex);
         pool.add(() =>
           this.processSend(db, campaign.id, campaign.tenantId, send.id, sub, {
             ...payload,
-            actions: this.resolveActions(campaign.actions as any, targeted + i),
+            actions,
             send_id: send.id,
           }, limiter, vapid, epoch),
         );
@@ -563,6 +582,11 @@ export class CampaignRunnerService implements OnModuleInit {
       this.paused.has(campaignId) || (this.epochs.get(campaignId) ?? epoch) !== epoch;
     // paused or superseded run: leave the send queued; resume() re-enqueues it
     if (stale()) return;
+
+    // Phase 1: the actual push attempt (the only thing that can be a "failure").
+    // Separated from result-recording so a DB hiccup AFTER a delivered push
+    // can never mislabel it as failed / double-count.
+    let pushError: PushError | Error | null = null;
     try {
       if (limiter) await limiter.wait();
       if (stale()) return; // paused/superseded while waiting for a pacing slot
@@ -580,40 +604,52 @@ export class CampaignRunnerService implements OnModuleInit {
           throw e;
         }
       }
-      const now = new Date();
-      await db.send.update({ where: { id: sendId }, data: { status: "sent", sentAt: now } });
-      await db.subscriber.update({
-        where: { id: sub.id },
-        data: { pushesReceived: { increment: 1 }, lastPushAt: now },
-      });
-      await db.campaign.update({
-        where: { id: campaignId },
-        data: { totalSent: { increment: 1 }, totalDelivered: { increment: 1 } },
-      });
-      await this.done(campaignId, tenantId);
     } catch (e) {
-      const code = e instanceof PushError ? e.statusCode : null;
-      if (code === 404 || code === 410) {
-        await db.send.update({
-          where: { id: sendId },
-          data: { status: "expired", errorCode: String(code) },
+      pushError = e as Error;
+    }
+
+    // Phase 2: record the outcome. Wrapped so a DB error here is logged, not
+    // thrown — and it never flips a delivered push into a failure.
+    try {
+      if (pushError === null) {
+        const now = new Date();
+        await db.send.update({ where: { id: sendId }, data: { status: "sent", sentAt: now } });
+        await db.subscriber.update({
+          where: { id: sub.id },
+          data: { pushesReceived: { increment: 1 }, lastPushAt: now },
         });
-        await db.subscriber.update({ where: { id: sub.id }, data: { status: "expired" } });
         await db.campaign.update({
           where: { id: campaignId },
-          data: { totalExpiredPruned: { increment: 1 } },
+          data: { totalSent: { increment: 1 }, totalDelivered: { increment: 1 } },
         });
       } else {
-        await db.send.update({
-          where: { id: sendId },
-          data: { status: "failed", errorCode: code ? String(code) : "error" },
-        });
-        await db.campaign.update({
-          where: { id: campaignId },
-          data: { totalFailed: { increment: 1 } },
-        });
+        const code = pushError instanceof PushError ? pushError.statusCode : null;
+        if (code === 404 || code === 410) {
+          await db.send.update({
+            where: { id: sendId },
+            data: { status: "expired", errorCode: String(code) },
+          });
+          await db.subscriber.update({ where: { id: sub.id }, data: { status: "expired" } });
+          await db.campaign.update({
+            where: { id: campaignId },
+            data: { totalExpiredPruned: { increment: 1 } },
+          });
+        } else {
+          await db.send.update({
+            where: { id: sendId },
+            data: { status: "failed", errorCode: code ? String(code) : "error" },
+          });
+          await db.campaign.update({
+            where: { id: campaignId },
+            data: { totalFailed: { increment: 1 } },
+          });
+        }
       }
-      await this.done(campaignId, tenantId);
+    } catch (dbErr: any) {
+      this.logger.error(`send ${sendId} result-record failed: ${dbErr.message}`);
+    } finally {
+      // always decrement completion bookkeeping so the campaign can finalize
+      await this.done(campaignId, tenantId).catch(() => undefined);
     }
   }
 }

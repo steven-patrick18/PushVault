@@ -410,7 +410,8 @@ export default function CampaignDetail() {
         method: "PATCH",
         body: JSON.stringify({
           name: form.name, title: form.title, body: form.body, clickUrl: form.clickUrl,
-          iconUrl: form.iconUrl || undefined, imageUrl: form.imageUrl || undefined,
+          // null (not undefined) so emptying a field actually clears it server-side
+          iconUrl: form.iconUrl || null, imageUrl: form.imageUrl || null,
           actions: actionsPayload(),
           segmentIds,
           mixStrategy,
@@ -451,6 +452,10 @@ export default function CampaignDetail() {
 
   async function schedule() {
     if (!form.scheduleAt) { setError("Pick a schedule time first"); return; }
+    if (nothingToDial) {
+      setError("No leads selected — pick at least one segment or enable 'All active subscribers'");
+      return;
+    }
     if (!(await save())) return;
     await api(`/campaigns/${id}/schedule`, {
       method: "POST",
@@ -707,7 +712,7 @@ export default function CampaignDetail() {
                     <button className="btn" onClick={() => lifecycle("resume")} disabled={busy}>▶ Save &amp; Resume</button>
                   ) : (
                     <>
-                      {campaign.status !== "scheduled" && <button className="btn secondary" onClick={schedule} disabled={busy || !form.scheduleAt}>Schedule</button>}
+                      {campaign.status !== "scheduled" && <button className="btn secondary" onClick={schedule} disabled={busy || !form.scheduleAt || nothingToDial}>Schedule</button>}
                       <button className="btn" onClick={() => lifecycle("send-now")} disabled={busy || nothingToDial}>Send now</button>
                     </>
                   )}

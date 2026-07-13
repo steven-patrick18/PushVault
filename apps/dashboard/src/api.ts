@@ -41,5 +41,8 @@ export async function api<T = unknown>(
     const body = await res.json().catch(() => ({}));
     throw new Error((body as any).message ?? `Request failed (${res.status})`);
   }
-  return res.json() as Promise<T>;
+  // tolerate 204 / empty-body responses so lifecycle calls don't throw
+  if (res.status === 204) return undefined as T;
+  const text = await res.text();
+  return (text ? JSON.parse(text) : undefined) as T;
 }

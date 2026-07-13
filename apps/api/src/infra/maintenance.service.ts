@@ -2,6 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/commo
 import { PrismaService } from "./prisma.service";
 
 const HOURLY = 3600_000;
+const IDLE_WINDOW = 20 * 60_000; // no sends in 20 min → orphaned, safe to finalize
 const SEND_RETENTION_DAYS = 90;
 
 /**
@@ -63,15 +64,28 @@ export class MaintenanceService implements OnModuleInit, OnModuleDestroy {
     if (refreshed) this.logger.log(`segment counts refreshed: ${refreshed}`);
   }
 
-  /** Campaigns stuck in `sending` (e.g. process restart mid-blast) with no queued work left. */
+  /**
+   * Genuinely-orphaned campaigns (process died mid-blast and didn't resume).
+   * A campaign is only "stuck" if it has been sending for >1h AND has produced
+   * NO send activity in the last IDLE_WINDOW — a live blast (even paced to
+   * 1/min, or one resumed after a restart) keeps writing sends, so it is never
+   * finalized out from under the runner. Preserves already-recorded counters
+   * instead of recomputing (recompute could clobber a live increment).
+   */
   private async finalizeStuckCampaigns() {
     const oneHourAgo = new Date(Date.now() - HOURLY);
-    const stuck = await this.prisma.system.campaign.findMany({
+    const idleSince = new Date(Date.now() - IDLE_WINDOW);
+    const candidates = await this.prisma.system.campaign.findMany({
       where: { status: "sending", startedAt: { lt: oneHourAgo } },
       select: { id: true, tenantId: true },
     });
-    for (const c of stuck) {
+    for (const c of candidates) {
       const db = this.prisma.forTenant(c.tenantId);
+      const recentActivity = await db.send.count({
+        where: { campaignId: c.id, sentAt: { gte: idleSince } },
+      });
+      if (recentActivity > 0) continue; // still actively delivering — leave it
+
       const counts = await db.send.groupBy({
         by: ["status"],
         where: { campaignId: c.id },
@@ -79,18 +93,19 @@ export class MaintenanceService implements OnModuleInit, OnModuleDestroy {
       });
       const map = new Map(counts.map((x) => [x.status, x._count.status]));
       const sent = map.get("sent") ?? 0;
+      const queued = map.get("queued") ?? 0;
       await db.campaign.update({
         where: { id: c.id },
         data: {
-          status: (map.get("queued") ?? 0) > 0 ? "failed" : "sent",
+          status: queued > 0 ? "failed" : "sent",
           finishedAt: new Date(),
           totalSent: sent,
           totalDelivered: sent,
-          totalFailed: (map.get("failed") ?? 0) + (map.get("queued") ?? 0),
+          totalFailed: (map.get("failed") ?? 0) + queued,
           totalExpiredPruned: map.get("expired") ?? 0,
         },
       });
-      this.logger.warn(`finalized stuck campaign ${c.id}`);
+      this.logger.warn(`finalized orphaned campaign ${c.id} (idle >${IDLE_WINDOW / 60000}m)`);
     }
   }
 
