@@ -52,6 +52,16 @@ class CreateCampaignDto {
   @IsString()
   clickUrl: string;
 
+  // call-first: pooled numbers dialed on body tap (overrides clickUrl)
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  callNumbers?: string[];
+
+  @IsOptional()
+  @IsIn(["round_robin", "random"])
+  callStrategy?: string;
+
   @IsOptional()
   @IsString()
   iconUrl?: string;
@@ -100,6 +110,8 @@ class UpdateCampaignDto {
   @IsOptional() @ValidateIf((_, v) => v !== null) @IsString() iconUrl?: string | null;
   @IsOptional() @ValidateIf((_, v) => v !== null) @IsString() imageUrl?: string | null;
   @IsOptional() @IsArray() actions?: unknown[];
+  @IsOptional() @IsArray() @IsString({ each: true }) callNumbers?: string[];
+  @IsOptional() @IsIn(["round_robin", "random"]) callStrategy?: string;
   @IsOptional() @IsArray() @IsUUID(undefined, { each: true }) segmentIds?: string[];
   @IsOptional() @IsIn(["mixed", "sequential", "zone"]) mixStrategy?: string;
   @IsOptional() @IsBoolean() targetAll?: boolean;
@@ -170,6 +182,8 @@ export class CampaignsController {
         title: dto.title,
         body: dto.body,
         clickUrl: dto.clickUrl,
+        callNumbers: dto.callNumbers ?? [],
+        callStrategy: dto.callStrategy ?? "round_robin",
         iconUrl: dto.iconUrl ?? null,
         imageUrl: dto.imageUrl ?? null,
         actions: (dto.actions as any) ?? undefined,

@@ -213,9 +213,11 @@ export class CampaignRunnerService implements OnModuleInit {
         }
         const payload = send.variant === "B" && variantBPayload ? variantBPayload : basePayload;
         const actions = this.resolveActions(campaign.actions as any, requeued);
+        const url = this.resolveClickUrl(campaign, requeued);
         pool.add(() =>
           this.processSend(db, campaignId, campaign.tenantId, send.id, send.subscriber, {
             ...payload,
+            url,
             actions,
             send_id: send.id,
           }, limiter, vapid, epoch),
@@ -278,6 +280,22 @@ export class CampaignRunnerService implements OnModuleInit {
       }
       return { action: a.action, title: a.title, url: a.url };
     });
+  }
+
+  /**
+   * Body-tap target per lead. Call-first campaigns dial a pooled number
+   * (tapping the notification opens the dialer); otherwise the plain click URL.
+   */
+  private resolveClickUrl(campaign: any, index: number): string {
+    const nums: string[] = campaign.callNumbers ?? [];
+    if (nums.length > 0) {
+      const n =
+        campaign.callStrategy === "random"
+          ? nums[Math.floor(Math.random() * nums.length)]
+          : nums[index % nums.length];
+      return `tel:${n}`;
+    }
+    return campaign.clickUrl;
   }
 
   /**
@@ -494,9 +512,11 @@ export class CampaignRunnerService implements OnModuleInit {
         // round-robin routing to a single number for every deferred send
         const actionIndex = targeted + i;
         const actions = this.resolveActions(campaign.actions as any, actionIndex);
+        const url = this.resolveClickUrl(campaign, actionIndex);
         pool.add(() =>
           this.processSend(db, campaign.id, campaign.tenantId, send.id, sub, {
             ...payload,
+            url,
             actions,
             send_id: send.id,
           }, limiter, vapid, epoch),

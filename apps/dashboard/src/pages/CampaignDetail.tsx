@@ -19,6 +19,8 @@ interface Campaign {
   iconUrl: string | null;
   imageUrl: string | null;
   clickUrl: string;
+  callNumbers: string[];
+  callStrategy: string;
   actions: CampaignAction[] | null;
   abConfig: { enabled: boolean; variantB?: { title?: string; body?: string } } | null;
   recurrence: { freq: string; interval?: number; byweekday?: number[] } | null;
@@ -297,6 +299,10 @@ export default function CampaignDetail() {
   const [platform, setPlatform] = useState<Platform>("android");
   const [previewVariant, setPreviewVariant] = useState<"A" | "B">("A");
   const [form, setForm] = useState({ name: "", title: "", body: "", clickUrl: "", iconUrl: "", imageUrl: "", scheduleAt: "" });
+  const [tapAction, setTapAction] = useState<"url" | "call">("url");
+  const [callNumbers, setCallNumbers] = useState(""); // comma-separated
+  const [callStrategy, setCallStrategy] = useState<"round_robin" | "random">("round_robin");
+  const [propDomain, setPropDomain] = useState("yoursite.com");
   const [actions, setActions] = useState<ActionRow[]>([]);
   const [ab, setAb] = useState({ enabled: false, titleB: "", bodyB: "" });
   const [repeat, setRepeat] = useState("none");
@@ -341,6 +347,23 @@ export default function CampaignDetail() {
       setMixStrategy(c.mixStrategy ?? "mixed");
       setTargetAll(c.targetAll ?? false);
       setPacing(c.pacingPerMinute ? String(c.pacingPerMinute) : "");
+      // call-first vs url tap
+      if (c.callNumbers?.length) {
+        setTapAction("call");
+        setCallNumbers(c.callNumbers.join(", "));
+        setCallStrategy((c.callStrategy as any) ?? "round_robin");
+      } else {
+        setTapAction("url");
+        setCallNumbers("");
+      }
+      // the source domain shown on a real notification is the PROPERTY's domain
+      // (the push subscription origin), not the click URL
+      api<{ id: string; domains: string[] }[]>("/properties")
+        .then((ps) => {
+          const p = ps.find((x) => x.id === c.propertyId);
+          if (p?.domains?.[0]) setPropDomain(p.domains[0]);
+        })
+        .catch(() => {});
       if (c.status !== "draft") {
         api<Report>(`/campaigns/${id}/report`).then(setReport).catch(() => {});
         api<Cdr>(`/campaigns/${id}/cdr?page=${cdrPage}`).then(setCdr).catch(() => {});
@@ -403,13 +426,27 @@ export default function CampaignDetail() {
       });
   }
 
+  function callNumbersList(): string[] {
+    return callNumbers.split(",").map((n) => n.replace(/[^\d+]/g, "")).filter(Boolean);
+  }
+
   async function save(): Promise<boolean> {
     setBusy(true); setMsg(""); setError("");
     try {
+      const nums = tapAction === "call" ? callNumbersList() : [];
+      if (tapAction === "call" && nums.length === 0) {
+        setError("Add at least one phone number for a click-to-call campaign");
+        setBusy(false);
+        return false;
+      }
+      // call mode: body tap dials; clickUrl holds the first number as fallback
+      const clickUrl = tapAction === "call" ? `tel:${nums[0]}` : form.clickUrl;
       await api(`/campaigns/${id}`, {
         method: "PATCH",
         body: JSON.stringify({
-          name: form.name, title: form.title, body: form.body, clickUrl: form.clickUrl,
+          name: form.name, title: form.title, body: form.body, clickUrl,
+          callNumbers: nums,
+          callStrategy,
           // null (not undefined) so emptying a field actually clears it server-side
           iconUrl: form.iconUrl || null, imageUrl: form.imageUrl || null,
           actions: actionsPayload(),
@@ -497,12 +534,15 @@ export default function CampaignDetail() {
   }
 
   async function duplicate() {
+    const nums = tapAction === "call" ? callNumbersList() : [];
     const created = await api<Campaign>("/campaigns", {
       method: "POST",
       body: JSON.stringify({
         propertyId: campaign!.propertyId,
         name: form.name + " (copy)",
-        title: form.title, body: form.body, clickUrl: form.clickUrl,
+        title: form.title, body: form.body,
+        clickUrl: nums.length ? `tel:${nums[0]}` : form.clickUrl,
+        callNumbers: nums, callStrategy,
         iconUrl: form.iconUrl || undefined, imageUrl: form.imageUrl || undefined,
         actions: actionsPayload(),
         segmentIds, mixStrategy, targetAll,
@@ -515,7 +555,8 @@ export default function CampaignDetail() {
 
   if (!campaign) return <div className="page-sub">{error || "Loading…"}</div>;
 
-  const domain = (() => { try { return new URL(form.clickUrl).host; } catch { return "yoursite.com"; } })();
+  // real notifications show the PROPERTY domain (push subscription origin)
+  const domain = propDomain;
   const previewProps: PreviewProps = {
     title: (previewVariant === "B" && ab.enabled ? (ab.titleB || form.title) : form.title) || "Notification title",
     body: (previewVariant === "B" && ab.enabled ? (ab.bodyB || form.body) : form.body) || "Notification body",
@@ -742,8 +783,44 @@ export default function CampaignDetail() {
                 )}
                 <label>Body <span style={{ color: form.body.length > 120 ? "var(--amber)" : "var(--text-dim)", fontWeight: 400 }}>({form.body.length}/120)</span></label>
                 <textarea rows={3} value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} />
-                <label>Click URL (where the tap lands)</label>
-                <input value={form.clickUrl} onChange={(e) => setForm({ ...form, clickUrl: e.target.value })} />
+
+                <label>When the notification is tapped…</label>
+                <div style={{ display: "flex", gap: 8, marginBottom: 4 }}>
+                  <button type="button" className={"btn small " + (tapAction === "url" ? "" : "secondary")} onClick={() => setTapAction("url")}>🌐 Open website</button>
+                  <button type="button" className={"btn small " + (tapAction === "call" ? "" : "secondary")} onClick={() => setTapAction("call")}>📞 Call number</button>
+                </div>
+                {tapAction === "url" ? (
+                  <>
+                    <label>Click URL (where the tap lands)</label>
+                    <input value={form.clickUrl} placeholder="https://…" onChange={(e) => setForm({ ...form, clickUrl: e.target.value })} />
+                  </>
+                ) : (
+                  <div className="panel" style={{ padding: 12 }}>
+                    <label>Phone number(s) — tapping the notification opens the dialer</label>
+                    <input
+                      value={callNumbers}
+                      placeholder="+91 98765 43210, +91 91234 56789, …"
+                      onChange={(e) => setCallNumbers(e.target.value)}
+                    />
+                    {callNumbersList().length > 1 && (
+                      <>
+                        <label>Distribute calls across numbers</label>
+                        <select value={callStrategy} onChange={(e) => setCallStrategy(e.target.value as any)} style={{ width: 200 }}>
+                          <option value="round_robin">Round robin (even)</option>
+                          <option value="random">Random</option>
+                        </select>
+                        <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 4 }}>
+                          {callNumbersList().length} numbers — each lead's tap dials one, {callStrategy === "random" ? "picked at random" : "distributed round-robin"}.
+                        </div>
+                      </>
+                    )}
+                    <div style={{ fontSize: 11, color: "var(--amber)", marginTop: 8 }}>
+                      ⚠ Tap-to-dial works on Android &amp; desktop. On iPhone/iPad web push, Apple blocks
+                      <code>tel:</code> from notifications — iOS leads open the site instead. For guaranteed
+                      dialing everywhere, also add a click-to-call action button below.
+                    </div>
+                  </div>
+                )}
                 <div style={{ display: "flex", gap: 8 }}>
                   <div style={{ flex: 1 }}>
                     <label>Icon URL</label>

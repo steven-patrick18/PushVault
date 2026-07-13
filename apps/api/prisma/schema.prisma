@@ -223,6 +223,10 @@ model Campaign {
   iconUrl            String?        @map("icon_url")
   imageUrl           String?        @map("image_url")
   clickUrl           String         @map("click_url")
+  // call-first: when set, tapping the notification body dials one of these
+  // numbers (per-lead routing), overriding clickUrl
+  callNumbers        String[]       @default([]) @map("call_numbers")
+  callStrategy       String         @default("round_robin") @map("call_strategy")
   actions            Json?
   segmentId          String?        @map("segment_id") @db.Uuid
   segmentIds         String[]       @default([]) @map("segment_ids") @db.Uuid
