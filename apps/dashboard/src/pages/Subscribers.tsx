@@ -60,6 +60,7 @@ const EMPTY_FILTERS = {
   utm_source: "",
   from: "",
   to: "",
+  fresh: "",
 };
 
 export default function Subscribers() {
@@ -205,6 +206,14 @@ export default function Subscribers() {
       <div className="panel">
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
           <div>
+            <label style={{ margin: "0 0 4px" }}>Freshness</label>
+            <select value={filters.fresh} style={{ width: 170 }} onChange={(e) => setFilter("fresh", e.target.value)}>
+              <option value="">All</option>
+              <option value="yes">🌱 Fresh — never pushed</option>
+              <option value="no">Contacted before</option>
+            </select>
+          </div>
+          <div>
             <label style={{ margin: "0 0 4px" }}>Device</label>
             <select value={filters.device} style={{ width: 130 }} onChange={(e) => setFilter("device", e.target.value)}>
               <option value="">All</option>
@@ -242,7 +251,14 @@ export default function Subscribers() {
 
         {/* assign filtered to segment */}
         {!readOnly && (
-          <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--border)" }}>
+          <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 14, paddingTop: 12, borderTop: "1px solid var(--border)", flexWrap: "wrap" }}>
+            <button
+              className={"btn small " + (filters.fresh === "yes" && filters.status === "active" ? "" : "secondary")}
+              onClick={() => { setFilters({ ...EMPTY_FILTERS, status: "active", fresh: "yes" }); setPage(1); }}
+              title="Active leads that never received a push"
+            >
+              🌱 Select fresh leads
+            </button>
             <span style={{ fontSize: 13, color: "var(--text-dim)" }}>
               Assign the {data?.total.toLocaleString() ?? "…"} filtered leads to:
             </span>

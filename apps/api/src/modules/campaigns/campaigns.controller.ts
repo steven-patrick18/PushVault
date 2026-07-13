@@ -13,6 +13,7 @@ import {
 } from "@nestjs/common";
 import {
   IsArray,
+  IsBoolean,
   IsDateString,
   IsIn,
   IsInt,
@@ -76,6 +77,10 @@ class CreateCampaignDto {
   mixStrategy?: string;
 
   @IsOptional()
+  @IsBoolean()
+  targetAll?: boolean;
+
+  @IsOptional()
   @IsInt()
   @Min(1)
   pacingPerMinute?: number;
@@ -95,6 +100,7 @@ class UpdateCampaignDto {
   @IsOptional() @IsArray() actions?: unknown[];
   @IsOptional() @IsArray() @IsUUID(undefined, { each: true }) segmentIds?: string[];
   @IsOptional() @IsIn(["mixed", "sequential", "zone"]) mixStrategy?: string;
+  @IsOptional() @IsBoolean() targetAll?: boolean;
   // null = unassign segment (target all active subscribers)
   @IsOptional() @ValidateIf((_, v) => v !== null) @IsUUID() segmentId?: string | null;
   // null = full speed
@@ -167,6 +173,7 @@ export class CampaignsController {
         segmentId: dto.segmentId ?? null,
         segmentIds: dto.segmentIds ?? [],
         mixStrategy: dto.mixStrategy ?? "mixed",
+        targetAll: dto.targetAll ?? false,
         pacingPerMinute: dto.pacingPerMinute ?? null,
         abConfig: (dto.abConfig as any) ?? undefined,
       },
@@ -183,8 +190,9 @@ export class CampaignsController {
   ) {
     const existing = await this.db(user).campaign.findUnique({ where: { id } });
     if (!existing) throw new NotFoundException("Campaign not found");
-    if (!["draft", "scheduled"].includes(existing.status)) {
-      throw new BadRequestException("Only draft or scheduled campaigns can be edited");
+    // paused blasts are editable: changes apply to the remaining queued leads on resume
+    if (!["draft", "scheduled", "paused"].includes(existing.status)) {
+      throw new BadRequestException("Only draft, scheduled or paused campaigns can be edited");
     }
     return this.db(user).campaign.update({ where: { id }, data: dto as any });
   }
@@ -193,9 +201,22 @@ export class CampaignsController {
   async sendNow(@CurrentUser() user: AuthUser, @Param("id", ParseUUIDPipe) id: string) {
     const campaign = await this.db(user).campaign.findUnique({ where: { id } });
     if (!campaign) throw new NotFoundException("Campaign not found");
+    if (!campaign.targetAll && !campaign.segmentIds?.length && !campaign.segmentId) {
+      throw new BadRequestException(
+        "No leads selected — pick at least one segment or enable 'All active subscribers'",
+      );
+    }
+    const remaining = await this.runner.quotaRemaining(user.tenantId);
+    if (remaining !== null && remaining <= 0) {
+      throw new BadRequestException("Monthly push quota exhausted — upgrade the plan in Settings");
+    }
     await this.audit(user, "campaign.send", id);
-    // dispatch runs async; the dashboard polls the report for progress
-    void this.runner.dispatch(id);
+    // dispatch runs async; the dashboard polls the live monitor for progress.
+    // MUST be caught — an unhandled rejection here would take the process down.
+    void this.runner.dispatch(id).catch((e) => {
+      // eslint-disable-next-line no-console
+      console.error(`dispatch failed for ${id}: ${e.message}`);
+    });
     return { ok: true, status: "sending" };
   }
 
@@ -247,7 +268,10 @@ export class CampaignsController {
     const campaign = await this.db(user).campaign.findUnique({ where: { id } });
     if (!campaign) throw new NotFoundException("Campaign not found");
     await this.audit(user, "campaign.resume", id);
-    void this.runner.resume(id);
+    void this.runner.resume(id).catch((e) => {
+      // eslint-disable-next-line no-console
+      console.error(`resume failed for ${id}: ${e.message}`);
+    });
     return { ok: true, status: "sending" };
   }
 
@@ -298,10 +322,11 @@ export class CampaignsController {
   @Post("audience-count")
   async audienceCount(
     @CurrentUser() user: AuthUser,
-    @Body() body: { propertyId: string; segmentIds?: string[] },
+    @Body() body: { propertyId: string; segmentIds?: string[]; targetAll?: boolean },
   ) {
     const db = this.db(user);
     if (!body.segmentIds?.length) {
+      if (!body.targetAll) return { count: 0 }; // none means none
       const count = await db.subscriber.count({
         where: { propertyId: body.propertyId, status: "active" },
       });

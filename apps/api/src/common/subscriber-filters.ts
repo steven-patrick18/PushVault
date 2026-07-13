@@ -14,6 +14,8 @@ export interface SubscriberFilterParams {
   timezone?: string;
   from?: string;
   to?: string;
+  /** 'yes' = never pushed (fresh leads), 'no' = already contacted */
+  fresh?: string;
 }
 
 export function buildSubscriberWhere(p: SubscriberFilterParams): Record<string, any> {
@@ -35,5 +37,7 @@ export function buildSubscriberWhere(p: SubscriberFilterParams): Record<string, 
     if (p.from) where.subscribedAt.gte = new Date(p.from);
     if (p.to) where.subscribedAt.lte = new Date(p.to);
   }
+  if (p.fresh === "yes") where.pushesReceived = 0;
+  if (p.fresh === "no") where.pushesReceived = { gt: 0 };
   return where;
 }

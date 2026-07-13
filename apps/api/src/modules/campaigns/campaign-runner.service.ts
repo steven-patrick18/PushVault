@@ -38,6 +38,15 @@ export class CampaignRunnerService implements OnModuleInit {
   private readonly remaining = new Map<string, number>();
   private consumedMap = new Map<string, number>();
   private readonly paused = new Set<string>();
+  // generation token per campaign: pause/resume/dispatch bump it so stale pool
+  // tasks from a previous run self-cancel (no double sends, no stale pacing)
+  private readonly epochs = new Map<string, number>();
+
+  private bumpEpoch(campaignId: string): number {
+    const next = (this.epochs.get(campaignId) ?? 0) + 1;
+    this.epochs.set(campaignId, next);
+    return next;
+  }
 
   constructor(
     private readonly prisma: PrismaService,
@@ -119,6 +128,7 @@ export class CampaignRunnerService implements OnModuleInit {
         segmentId: campaign.segmentId,
         segmentIds: campaign.segmentIds,
         mixStrategy: campaign.mixStrategy,
+        targetAll: campaign.targetAll,
         abConfig: campaign.abConfig as any,
         pacingPerMinute: campaign.pacingPerMinute,
         status: "draft",
@@ -142,6 +152,7 @@ export class CampaignRunnerService implements OnModuleInit {
       throw new BadRequestException(`Campaign is ${campaign.status}, only sending campaigns can pause`);
     }
     this.paused.add(campaignId);
+    this.bumpEpoch(campaignId); // invalidate every task already in the pool
     this.remaining.delete(campaignId);
     this.consumedMap.delete(campaignId);
     await this.prisma.forTenant(campaign.tenantId).campaign.update({
@@ -162,6 +173,7 @@ export class CampaignRunnerService implements OnModuleInit {
       throw new BadRequestException(`Campaign is ${campaign.status}, only paused campaigns can resume`);
     }
     this.paused.delete(campaignId);
+    const epoch = this.bumpEpoch(campaignId);
     const db = this.prisma.forTenant(campaign.tenantId);
     await db.campaign.update({ where: { id: campaignId }, data: { status: "sending" } });
 
@@ -196,7 +208,7 @@ export class CampaignRunnerService implements OnModuleInit {
             ...payload,
             actions: this.resolveActions(campaign.actions as any, requeued),
             send_id: send.id,
-          }, limiter, vapid),
+          }, limiter, vapid, epoch),
         );
         requeued++;
       }
@@ -269,13 +281,15 @@ export class CampaignRunnerService implements OnModuleInit {
     db: TenantClient,
     campaign: any,
   ): Promise<string[] | null> {
+    // explicit "everyone" → stream all actives; no segments and no targetAll → nobody
+    if (campaign.targetAll) return null;
     const segmentIds: string[] =
       campaign.segmentIds?.length > 0
         ? campaign.segmentIds
         : campaign.segmentId
           ? [campaign.segmentId]
           : [];
-    if (segmentIds.length === 0) return null;
+    if (segmentIds.length === 0) return [];
 
     const segments = await db.segment.findMany({ where: { id: { in: segmentIds } } });
     // preserve the order segments were attached in
@@ -343,6 +357,13 @@ export class CampaignRunnerService implements OnModuleInit {
       throw new Error(`Campaign is ${campaign.status}, cannot dispatch`);
     }
 
+    // "none means none": without segments or an explicit target-all there is nothing to dial
+    if (!campaign.targetAll && !campaign.segmentIds?.length && !campaign.segmentId) {
+      throw new BadRequestException(
+        "No leads selected — pick at least one segment or enable 'All active subscribers'",
+      );
+    }
+
     let remainingQuota = await this.quotaRemaining(campaign.tenantId);
     if (remainingQuota !== null && remainingQuota <= 0) {
       throw new BadRequestException("Monthly push quota exhausted — upgrade the plan in Settings");
@@ -350,6 +371,7 @@ export class CampaignRunnerService implements OnModuleInit {
 
     const db = this.prisma.forTenant(campaign.tenantId);
     this.paused.delete(campaignId);
+    const epoch = this.bumpEpoch(campaignId);
     await db.campaign.update({
       where: { id: campaign.id },
       data: {
@@ -458,7 +480,7 @@ export class CampaignRunnerService implements OnModuleInit {
             ...payload,
             actions: this.resolveActions(campaign.actions as any, targeted + i),
             send_id: send.id,
-          }, limiter, vapid),
+          }, limiter, vapid, epoch),
         );
       }
       targeted += sendRows.length;
@@ -535,12 +557,15 @@ export class CampaignRunnerService implements OnModuleInit {
     payload: any,
     limiter: RateLimiter | null = null,
     vapid: VapidOverride | null = null,
+    epoch = 0,
   ): Promise<void> {
-    // paused: leave the send queued; resume() re-enqueues it
-    if (this.paused.has(campaignId)) return;
+    const stale = () =>
+      this.paused.has(campaignId) || (this.epochs.get(campaignId) ?? epoch) !== epoch;
+    // paused or superseded run: leave the send queued; resume() re-enqueues it
+    if (stale()) return;
     try {
       if (limiter) await limiter.wait();
-      if (this.paused.has(campaignId)) return; // paused while waiting for pacing slot
+      if (stale()) return; // paused/superseded while waiting for a pacing slot
       let attempt = 0;
       for (;;) {
         attempt++;

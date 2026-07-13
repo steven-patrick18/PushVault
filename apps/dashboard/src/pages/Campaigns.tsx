@@ -116,6 +116,7 @@ export default function Campaigns() {
           iconUrl: form.iconUrl || undefined,
           imageUrl: form.imageUrl || undefined,
           segmentId: form.segmentId || undefined,
+          targetAll: !form.segmentId, // composer's "All active subscribers" choice
           pacingPerMinute: form.pacing ? Number(form.pacing) : undefined,
         }),
       });

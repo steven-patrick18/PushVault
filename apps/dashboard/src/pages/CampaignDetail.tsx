@@ -24,6 +24,7 @@ interface Campaign {
   recurrence: { freq: string; interval?: number; byweekday?: number[] } | null;
   segmentIds: string[];
   mixStrategy: string;
+  targetAll: boolean;
   status: string;
   scheduleAt: string | null;
   pacingPerMinute: number | null;
@@ -252,12 +253,15 @@ export default function CampaignDetail() {
   const [weekdays, setWeekdays] = useState<number[]>([]);
   const [segmentIds, setSegmentIds] = useState<string[]>([]);
   const [mixStrategy, setMixStrategy] = useState("mixed");
+  const [targetAll, setTargetAll] = useState(false);
   const [pacing, setPacing] = useState("");
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
-  const editable = campaign ? ["draft", "scheduled"].includes(campaign.status) && canEdit : false;
+  // paused blasts stay editable — changes apply to the remaining queued leads on resume
+  const editable = campaign ? ["draft", "scheduled", "paused"].includes(campaign.status) && canEdit : false;
+  const nothingToDial = !targetAll && segmentIds.length === 0;
 
   const load = useCallback(() => {
     api<Campaign>(`/campaigns/${id}`).then((c) => {
@@ -283,6 +287,7 @@ export default function CampaignDetail() {
       setWeekdays(c.recurrence?.byweekday ?? []);
       setSegmentIds(c.segmentIds?.length ? c.segmentIds : c.segment ? [c.segment.id] : []);
       setMixStrategy(c.mixStrategy ?? "mixed");
+      setTargetAll(c.targetAll ?? false);
       setPacing(c.pacingPerMinute ? String(c.pacingPerMinute) : "");
       if (c.status !== "draft") {
         api<Report>(`/campaigns/${id}/report`).then(setReport).catch(() => {});
@@ -313,10 +318,10 @@ export default function CampaignDetail() {
     setAudience(null);
     api<{ count: number }>(`/campaigns/audience-count`, {
       method: "POST",
-      body: JSON.stringify({ propertyId: campaign.propertyId, segmentIds }),
+      body: JSON.stringify({ propertyId: campaign.propertyId, segmentIds, targetAll }),
     }).then((r) => { if (!stale) setAudience(r.count); }).catch(() => {});
     return () => { stale = true; };
-  }, [campaign, segmentIds]);
+  }, [campaign, segmentIds, targetAll]);
 
   function actionsPayload(): CampaignAction[] {
     return actions
@@ -348,12 +353,13 @@ export default function CampaignDetail() {
           actions: actionsPayload(),
           segmentIds,
           mixStrategy,
+          targetAll,
           segmentId: segmentIds[0] ?? null,
           pacingPerMinute: pacing ? Number(pacing) : null,
           abConfig: ab.enabled ? { enabled: true, variantB: { title: ab.titleB, body: ab.bodyB } } : null,
         }),
       });
-      setMsg("Saved");
+      setMsg(campaign?.status === "paused" ? "Saved — applies to remaining leads on resume" : "Saved");
       load();
       return true;
     } catch (e: any) {
@@ -368,6 +374,10 @@ export default function CampaignDetail() {
     setError("");
     try {
       if (action === "send-now") {
+        if (nothingToDial) {
+          setError("No leads selected — pick at least one segment or enable 'All active subscribers'");
+          return;
+        }
         if (editable && !(await save())) return;
         if (!confirm(`Blast to ${audience ?? "?"} leads now?`)) return;
       }
@@ -400,7 +410,7 @@ export default function CampaignDetail() {
         title: form.title, body: form.body, clickUrl: form.clickUrl,
         iconUrl: form.iconUrl || undefined, imageUrl: form.imageUrl || undefined,
         actions: actionsPayload(),
-        segmentIds, mixStrategy,
+        segmentIds, mixStrategy, targetAll,
         pacingPerMinute: pacing ? Number(pacing) : undefined,
         abConfig: ab.enabled ? { enabled: true, variantB: { title: ab.titleB, body: ab.bodyB } } : undefined,
       }),
@@ -498,7 +508,7 @@ export default function CampaignDetail() {
             <table>
               <tbody>
                 <tr><td style={{ color: "var(--text-dim)", width: 160 }}>Message</td><td><b>{campaign.title}</b><div style={{ fontSize: 12, color: "var(--text-dim)" }}>{campaign.body}</div></td></tr>
-                <tr><td style={{ color: "var(--text-dim)" }}>Leads</td><td>{segmentIds.length === 0 ? "All active subscribers" : segmentIds.map((sid) => segments.find((s) => s.id === sid)?.name ?? "…").join(" + ")}{segmentIds.length > 1 && <span className="badge purple" style={{ marginLeft: 8 }}>{mixStrategy === "mixed" ? "mixed evenly" : mixStrategy === "sequential" ? "one after another" : "zone-wise"}</span>}</td></tr>
+                <tr><td style={{ color: "var(--text-dim)" }}>Leads</td><td>{targetAll ? "🌐 All active subscribers" : segmentIds.length === 0 ? <span className="badge amber">none — nothing to dial</span> : segmentIds.map((sid) => segments.find((s) => s.id === sid)?.name ?? "…").join(" + ")}{segmentIds.length > 1 && <span className="badge purple" style={{ marginLeft: 8 }}>{mixStrategy === "mixed" ? "mixed evenly" : mixStrategy === "sequential" ? "one after another" : "zone-wise"}</span>}</td></tr>
                 <tr><td style={{ color: "var(--text-dim)" }}>Audience</td><td>{audience === null ? "…" : `${audience.toLocaleString()} leads`}</td></tr>
                 <tr><td style={{ color: "var(--text-dim)" }}>Pacing</td><td>{campaign.pacingPerMinute ? `${campaign.pacingPerMinute} / minute` : "Full speed"}</td></tr>
                 <tr><td style={{ color: "var(--text-dim)" }}>A/B test</td><td>{campaign.abConfig?.enabled ? "On — 50/50" : "Off"}</td></tr>
@@ -537,14 +547,24 @@ export default function CampaignDetail() {
         <>
           <div className="flex-between" style={{ marginBottom: 14 }}>
             <div className="page-sub" style={{ marginBottom: 0 }}>
-              {editable ? "Full campaign setup — content, targeting, pacing, A/B." : `Campaign is ${campaign.status} — content locked. Duplicate to edit.`}
+              {campaign.status === "paused"
+                ? "⏸ Paused — every section is editable. Saved changes apply to the remaining queued leads when you resume."
+                : editable
+                  ? "Full campaign setup — content, targeting, pacing, A/B."
+                  : `Campaign is ${campaign.status} — content locked. Duplicate to edit.`}
             </div>
             <div className="row-actions">
               {editable && (
                 <>
                   <button className="btn secondary" onClick={() => save()} disabled={busy}>Save</button>
-                  {campaign.status !== "scheduled" && <button className="btn secondary" onClick={schedule} disabled={busy || !form.scheduleAt}>Schedule</button>}
-                  <button className="btn" onClick={() => lifecycle("send-now")} disabled={busy}>Send now</button>
+                  {campaign.status === "paused" ? (
+                    <button className="btn" onClick={() => lifecycle("resume")} disabled={busy}>▶ Save &amp; Resume</button>
+                  ) : (
+                    <>
+                      {campaign.status !== "scheduled" && <button className="btn secondary" onClick={schedule} disabled={busy || !form.scheduleAt}>Schedule</button>}
+                      <button className="btn" onClick={() => lifecycle("send-now")} disabled={busy || nothingToDial}>Send now</button>
+                    </>
+                  )}
                 </>
               )}
               {!editable && <button className="btn" onClick={duplicate}>Duplicate as draft</button>}
@@ -640,17 +660,29 @@ export default function CampaignDetail() {
                 )}
 
                 <h3 style={{ marginTop: 22 }}>Leads &amp; mixing</h3>
-                <label>Segments (pick one or more; none = all active subscribers)</label>
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8, padding: "8px 10px", background: "var(--bg-elevated)", borderRadius: 8 }}>
+                  <input type="checkbox" style={{ width: "auto" }}
+                    checked={targetAll}
+                    onChange={(e) => { setTargetAll(e.target.checked); if (e.target.checked) setSegmentIds([]); }} />
+                  <span style={{ fontSize: 13, fontWeight: 600 }}>🌐 All active subscribers</span>
+                  <span style={{ fontSize: 11, color: "var(--text-dim)" }}>(ignores segments)</span>
+                </div>
+                <label>Segments (pick one or more)</label>
                 {segments.map((s) => (
-                  <div key={s.id} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4 }}>
+                  <div key={s.id} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4, opacity: targetAll ? 0.4 : 1 }}>
                     <input type="checkbox" style={{ width: "auto" }}
+                      disabled={targetAll}
                       checked={segmentIds.includes(s.id)}
                       onChange={(e) => setSegmentIds(e.target.checked ? [...segmentIds, s.id] : segmentIds.filter((x) => x !== s.id))} />
                     <span style={{ fontSize: 13 }}>{s.name}</span>
                   </div>
                 ))}
                 <div style={{ marginTop: 8 }}>
-                  <span className="badge purple">{audience === null ? "counting…" : `${audience.toLocaleString()} leads (deduped)`}</span>
+                  {nothingToDial ? (
+                    <span className="badge amber">⚠ 0 leads — nothing to dial. Pick segments or enable "All active subscribers".</span>
+                  ) : (
+                    <span className="badge purple">{audience === null ? "counting…" : `${audience.toLocaleString()} leads (deduped)`}</span>
+                  )}
                 </div>
                 {segmentIds.length > 1 && (
                   <>

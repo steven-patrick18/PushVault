@@ -225,6 +225,7 @@ model Campaign {
   segmentId          String?        @map("segment_id") @db.Uuid
   segmentIds         String[]       @default([]) @map("segment_ids") @db.Uuid
   mixStrategy        String         @default("mixed") @map("mix_strategy") // mixed | sequential | zone
+  targetAll          Boolean        @default(false) @map("target_all") // explicit: blast every active lead
   status             CampaignStatus @default(draft)
   pacingPerMinute    Int?           @map("pacing_per_minute")
   scheduleAt         DateTime?      @map("schedule_at") @db.Timestamptz()
