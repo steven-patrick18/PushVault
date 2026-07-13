@@ -82,7 +82,7 @@ export default function PropertyDetail() {
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
   const [guide, setGuide] = useState<"html" | "wordpress" | "shopify">("html");
-  const [previewDevice, setPreviewDevice] = useState<"desktop" | "mobile">("desktop");
+  const [previewDevice, setPreviewDevice] = useState<"desktop" | "mac" | "tablet" | "android" | "iphone">("desktop");
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null);
 
@@ -553,9 +553,18 @@ export default function PropertyDetail() {
           <div style={{ width: 480 }}>
             <div className="flex-between">
               <label>Live preview — how visitors see it on {property.domains[0]}</label>
-              <div style={{ display: "flex", gap: 4 }}>
-                <button type="button" className={"btn small " + (previewDevice === "desktop" ? "" : "secondary")} onClick={() => setPreviewDevice("desktop")}>🖥 Desktop</button>
-                <button type="button" className={"btn small " + (previewDevice === "mobile" ? "" : "secondary")} onClick={() => setPreviewDevice("mobile")}>📱 Mobile</button>
+              <div style={{ display: "flex", gap: 4, flexWrap: "wrap" }}>
+                {([
+                  ["desktop", "🖥 Windows"],
+                  ["mac", "🍎 Mac"],
+                  ["tablet", "📲 Tablet"],
+                  ["android", "🤖 Android"],
+                  ["iphone", "📱 iPhone"],
+                ] as const).map(([key, label]) => (
+                  <button key={key} type="button" className={"btn small " + (previewDevice === key ? "" : "secondary")} onClick={() => setPreviewDevice(key)}>
+                    {label}
+                  </button>
+                ))}
               </div>
             </div>
 
@@ -573,7 +582,9 @@ export default function PropertyDetail() {
                       : "0 4px 20px rgba(0,0,0,.25)";
                 const isFloat = cfg.style.position === "float";
                 // mockup is a shrunken page, so the configured px width is scaled down
-                const widthPx = Math.round((cfg.style.width ?? 460) * (previewDevice === "desktop" ? 0.45 : 0.8));
+                const widthFactor =
+                  previewDevice === "desktop" || previewDevice === "mac" ? 0.45 : previewDevice === "tablet" ? 0.62 : 0.8;
+                const widthPx = Math.round((cfg.style.width ?? 460) * widthFactor);
                 const s = scale * sizeScale;
                 const place: React.CSSProperties =
                   dragPos !== null
@@ -681,24 +692,32 @@ export default function PropertyDetail() {
                 </>
               );
 
-              if (previewDevice === "desktop") {
+              // -------- desktop browsers: Windows Chrome (dark) / Mac Safari-ish (light) --------
+              if (previewDevice === "desktop" || previewDevice === "mac") {
+                const isMac = previewDevice === "mac";
+                const chromeBg = isMac ? "#e9e9ee" : "#202124";
+                const barBg = isMac ? "#f6f6f8" : "#35363a";
+                const pillBg = isMac ? "#e3e3ea" : "#202124";
+                const fg = isMac ? "#333" : "#ddd";
+                const dim = isMac ? "#8a8a92" : "#aaa";
                 return (
-                  <div style={{ borderRadius: 10, overflow: "hidden", border: "1px solid #333", boxShadow: "0 14px 40px rgba(0,0,0,.4)", marginTop: 10 }}>
+                  <div style={{ borderRadius: 10, overflow: "hidden", border: isMac ? "1px solid #c8c8d0" : "1px solid #333", boxShadow: "0 14px 40px rgba(0,0,0,.4)", marginTop: 10 }}>
                     {/* browser chrome */}
-                    <div style={{ background: "#202124", padding: "6px 10px 0", display: "flex", gap: 6, alignItems: "flex-end" }}>
+                    <div style={{ background: chromeBg, padding: "6px 10px 0", display: "flex", gap: 6, alignItems: "flex-end" }}>
                       <span style={{ display: "flex", gap: 5, paddingBottom: 8, paddingRight: 4 }}>
                         <span style={{ width: 9, height: 9, borderRadius: "50%", background: "#ff5f57" }} />
                         <span style={{ width: 9, height: 9, borderRadius: "50%", background: "#febc2e" }} />
                         <span style={{ width: 9, height: 9, borderRadius: "50%", background: "#28c840" }} />
                       </span>
-                      <div style={{ background: "#35363a", color: "#ddd", borderRadius: "8px 8px 0 0", padding: "5px 14px", fontSize: 10, display: "flex", gap: 6, alignItems: "center" }}>
+                      <div style={{ background: barBg, color: fg, borderRadius: "8px 8px 0 0", padding: "5px 14px", fontSize: 10, display: "flex", gap: 6, alignItems: "center" }}>
                         <span>⚡</span> {property.name}
-                        <span style={{ color: "#888", marginLeft: 8 }}>✕</span>
+                        <span style={{ color: dim, marginLeft: 8 }}>✕</span>
                       </div>
+                      {isMac && <span style={{ marginLeft: "auto", color: dim, fontSize: 9, paddingBottom: 8 }}> macOS</span>}
                     </div>
-                    <div style={{ background: "#35363a", padding: "5px 10px", display: "flex", gap: 8, alignItems: "center" }}>
-                      <span style={{ color: "#aaa", fontSize: 11 }}>← → ⟳</span>
-                      <div style={{ flex: 1, background: "#202124", borderRadius: 999, padding: "4px 12px", fontSize: 10, color: "#ccc" }}>
+                    <div style={{ background: barBg, padding: "5px 10px", display: "flex", gap: 8, alignItems: "center" }}>
+                      <span style={{ color: dim, fontSize: 11 }}>← → ⟳</span>
+                      <div style={{ flex: 1, background: pillBg, borderRadius: 999, padding: "4px 12px", fontSize: 10, color: fg, textAlign: isMac ? "center" : "left" }}>
                         🔒 {property.domains[0]}
                       </div>
                     </div>
@@ -711,17 +730,50 @@ export default function PropertyDetail() {
                   </div>
                 );
               }
+
+              // -------- tablet (iPad-style portrait) --------
+              if (previewDevice === "tablet") {
+                return (
+                  <div style={{ display: "flex", justifyContent: "center", marginTop: 10 }}>
+                    <div style={{ width: 330, height: 430, borderRadius: 22, border: "11px solid #1a1a1e", background: "#fafafa", position: "relative", overflow: "hidden", boxShadow: "0 16px 44px rgba(0,0,0,.45)", display: "flex", flexDirection: "column" }}>
+                      <div style={{ background: "#202124", padding: "6px 12px 6px", flexShrink: 0 }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", color: "#ccc", fontSize: 8, marginBottom: 4 }}>
+                          <span>9:41 · Tue 14 Jul</span>
+                          <span>📶 82% 🔋</span>
+                        </div>
+                        <div style={{ background: "#35363a", borderRadius: 999, padding: "4px 12px", fontSize: 9, color: "#ccc", textAlign: "center" }}>
+                          🔒 {property.domains[0]}
+                        </div>
+                      </div>
+                      <div ref={viewportRef} style={{ position: "relative", flex: 1, overflow: "hidden" }}>
+                        {pageSkeleton}
+                        {banner(0.96)}
+                        {overlayControls}
+                      </div>
+                      <div style={{ position: "absolute", bottom: 3, left: "50%", transform: "translateX(-50%)", width: 110, height: 4, borderRadius: 2, background: "rgba(0,0,0,.3)", zIndex: 20 }} />
+                    </div>
+                  </div>
+                );
+              }
+
+              // -------- phones: Android (punch-hole) / iPhone (dynamic island, Safari) --------
+              const isIphone = previewDevice === "iphone";
               return (
                 <div style={{ display: "flex", justifyContent: "center", marginTop: 10 }}>
-                  <div style={{ width: 240, height: 470, borderRadius: 30, border: "8px solid #1c1e22", background: "#fafafa", position: "relative", overflow: "hidden", boxShadow: "0 16px 44px rgba(0,0,0,.45)", display: "flex", flexDirection: "column" }}>
+                  <div style={{ width: 240, height: 470, borderRadius: isIphone ? 36 : 30, border: "8px solid #1c1e22", background: "#fafafa", position: "relative", overflow: "hidden", boxShadow: "0 16px 44px rgba(0,0,0,.45)", display: "flex", flexDirection: "column" }}>
                     {/* mobile browser bar */}
-                    <div style={{ background: "#202124", padding: "8px 10px 6px", flexShrink: 0 }}>
-                      <div style={{ display: "flex", justifyContent: "space-between", color: "#ccc", fontSize: 8, marginBottom: 5 }}>
+                    <div style={{ background: "#202124", padding: "6px 10px 6px", flexShrink: 0, position: "relative" }}>
+                      {isIphone ? (
+                        <div style={{ position: "absolute", top: 5, left: "50%", transform: "translateX(-50%)", width: 74, height: 16, borderRadius: 10, background: "#000" }} />
+                      ) : (
+                        <div style={{ position: "absolute", top: 8, left: "50%", transform: "translateX(-50%)", width: 10, height: 10, borderRadius: "50%", background: "#000" }} />
+                      )}
+                      <div style={{ display: "flex", justifyContent: "space-between", color: "#ccc", fontSize: 8, marginBottom: 5, paddingTop: isIphone ? 14 : 8 }}>
                         <span>9:41</span>
                         <span>📶 🔋</span>
                       </div>
-                      <div style={{ background: "#35363a", borderRadius: 999, padding: "4px 10px", fontSize: 9, color: "#ccc" }}>
-                        🔒 {property.domains[0]}
+                      <div style={{ background: "#35363a", borderRadius: 999, padding: "4px 10px", fontSize: 9, color: "#ccc", textAlign: isIphone ? "center" : "left" }}>
+                        {isIphone ? "🔒 " + property.domains[0] + "  ↻" : "🔒 " + property.domains[0]}
                       </div>
                     </div>
                     {/* viewport: its own box so a bottom-placed banner stays fully visible */}
@@ -730,7 +782,7 @@ export default function PropertyDetail() {
                       {banner(0.92)}
                       {overlayControls}
                     </div>
-                    <div style={{ position: "absolute", bottom: 3, left: "50%", transform: "translateX(-50%)", width: 80, height: 4, borderRadius: 2, background: "rgba(0,0,0,.3)", zIndex: 20 }} />
+                    <div style={{ position: "absolute", bottom: 3, left: "50%", transform: "translateX(-50%)", width: 80, height: 4, borderRadius: 2, background: isIphone ? "rgba(0,0,0,.55)" : "rgba(0,0,0,.3)", zIndex: 20 }} />
                   </div>
                 </div>
               );

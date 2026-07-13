@@ -86,7 +86,7 @@ const EMOJI = ["🔥", "🎉", "✨", "🛍️", "💰", "⚡", "🔔", "🎁", 
 const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const PACING_PRESETS = [60, 300, 600, 1200, 3000];
 
-type Platform = "windows" | "android" | "mac" | "ios";
+type Platform = "windows" | "android" | "mac" | "ios" | "tablet";
 
 interface ActionRow {
   kind: "url" | "call";
@@ -241,7 +241,36 @@ const PREVIEW_NOTES: Record<Platform, string> = {
   android: "Android notification shade (Chrome). Big image when expanded; action buttons as text links. Click-to-call opens the dialer.",
   mac: "macOS banner, top-right under the menu bar. No big image or action buttons — keep the title short.",
   ios: "iOS 16.4+ lock screen. Works only after the visitor adds the site to their Home Screen; no images or buttons — title/body must carry the message.",
+  tablet: "Tablets follow their OS: iPadOS behaves like iOS (Home Screen required, no image/buttons — shown here); Android tablets behave like Android phones with a wider card.",
 };
+
+function TabletPreview({ title, body, icon }: PreviewProps) {
+  return (
+    <div style={{ width: 340, height: 450, borderRadius: 26, border: "12px solid #1a1a1e", background: "linear-gradient(160deg,#3d5a80 0%,#1f2f4a 60%,#131c30 100%)", position: "relative", overflow: "hidden", boxShadow: "0 20px 50px rgba(0,0,0,.5)" }}>
+      {/* front camera */}
+      <div style={{ position: "absolute", top: 8, left: "50%", transform: "translateX(-50%)", width: 8, height: 8, borderRadius: "50%", background: "#000" }} />
+      <div style={{ display: "flex", justifyContent: "space-between", padding: "10px 16px 0", color: "#dfe6f0", fontSize: 10 }}>
+        <span>Tuesday, 14 July</span>
+        <span>📶 82% 🔋</span>
+      </div>
+      <div style={{ textAlign: "center", marginTop: 46, color: "#fff" }}>
+        <div style={{ fontSize: 56, fontWeight: 300, lineHeight: 1 }}>9:41</div>
+      </div>
+      {/* notification banner — wider on tablets */}
+      <div style={{ margin: "30px 26px 0", background: "rgba(245,245,250,.9)", backdropFilter: "blur(6px)", borderRadius: 16, padding: "10px 14px", color: "#111", display: "flex", gap: 12, alignItems: "center" }}>
+        <Icon icon={icon} size={38} radius={9} />
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
+            <span style={{ fontWeight: 600, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{title}</span>
+            <span style={{ fontSize: 10.5, color: "#666", flexShrink: 0 }}>now</span>
+          </div>
+          <div style={{ fontSize: 12.5, color: "#333", overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{body}</div>
+        </div>
+      </div>
+      <div style={{ position: "absolute", bottom: 6, left: "50%", transform: "translateX(-50%)", width: 130, height: 4, borderRadius: 2, background: "rgba(255,255,255,.7)" }} />
+    </div>
+  );
+}
 
 function fmtElapsed(sec: number): string {
   if (sec < 60) return `${sec}s`;
@@ -859,10 +888,10 @@ export default function CampaignDetail() {
                   </div>
                 )}
               </div>
-              <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
-                {(["windows", "android", "mac", "ios"] as Platform[]).map((p) => (
+              <div style={{ display: "flex", gap: 6, marginBottom: 16, flexWrap: "wrap" }}>
+                {(["windows", "mac", "android", "ios", "tablet"] as Platform[]).map((p) => (
                   <button key={p} className={"btn small " + (platform === p ? "" : "secondary")} onClick={() => setPlatform(p)}>
-                    {p === "windows" ? "🪟 Windows" : p === "android" ? "🤖 Android" : p === "mac" ? "🍎 macOS" : "📱 iOS"}
+                    {p === "windows" ? "🪟 Windows" : p === "android" ? "🤖 Android" : p === "mac" ? "🍎 macOS" : p === "ios" ? "📱 iPhone" : "📲 Tablet"}
                   </button>
                 ))}
               </div>
@@ -871,6 +900,7 @@ export default function CampaignDetail() {
                 {platform === "android" && <AndroidPreview {...previewProps} />}
                 {platform === "windows" && <WindowsPreview {...previewProps} />}
                 {platform === "mac" && <MacPreview {...previewProps} />}
+                {platform === "tablet" && <TabletPreview {...previewProps} />}
               </div>
               <div className="preview-note" style={{ maxWidth: "100%", textAlign: "center" }}>{PREVIEW_NOTES[platform]}</div>
             </div>
