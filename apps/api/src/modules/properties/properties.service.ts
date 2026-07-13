@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
@@ -181,6 +182,44 @@ export class PropertiesService {
         !exclude.some((g) => toRegex(g).test(p.path)) &&
         include.some((g) => g === "*" || toRegex(g).test(p.path)),
     }));
+  }
+
+  /** Auto-assign distribution rule for new leads (status + weighted segment list). */
+  async getAutoAssign(user: AuthUser, id: string) {
+    const property = await this.db(user).property.findUnique({
+      where: { id },
+      select: { autoAssign: true },
+    });
+    if (!property) throw new NotFoundException("Property not found");
+    return property.autoAssign ?? { status: "paused", rules: [], counts: {} };
+  }
+
+  async setAutoAssign(
+    user: AuthUser,
+    id: string,
+    body: { status: "active" | "paused"; rules: { segmentId: string; weight: number }[] } | null,
+  ) {
+    const property = await this.db(user).property.findUnique({ where: { id } });
+    if (!property) throw new NotFoundException("Property not found");
+    if (body !== null) {
+      if (!["active", "paused"].includes(body.status)) {
+        throw new BadRequestException("status must be active or paused");
+      }
+      if (!Array.isArray(body.rules) || body.rules.some((r) => !r.segmentId || !(r.weight > 0))) {
+        throw new BadRequestException("rules need segmentId and weight > 0");
+      }
+    }
+    const previous = (property.autoAssign as any) ?? {};
+    const next =
+      body === null
+        ? null // stop: remove the rule entirely
+        : { status: body.status, rules: body.rules, counts: previous.counts ?? {} };
+    await this.db(user).property.update({
+      where: { id },
+      data: { autoAssign: next as any },
+    });
+    await this.audit(user, "property.auto_assign", id, previous, next);
+    return next ?? { status: "stopped", rules: [], counts: {} };
   }
 
   private installSnippet(propertyKey: string) {

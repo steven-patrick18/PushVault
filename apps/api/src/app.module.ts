@@ -2,6 +2,7 @@ import { Global, Module } from "@nestjs/common";
 import { JwtModule } from "@nestjs/jwt";
 import { PrismaService } from "./infra/prisma.service";
 import { MaintenanceService } from "./infra/maintenance.service";
+import { MembershipService } from "./modules/segments/membership.service";
 import { AuthModule } from "./modules/auth/auth.module";
 import { PropertiesModule } from "./modules/properties/properties.module";
 import { UpdatesModule } from "./modules/updates/updates.module";
@@ -42,7 +43,7 @@ class HealthController {
     SubscribersController,
     SettingsController,
   ],
-  providers: [PrismaService, MaintenanceService],
-  exports: [PrismaService],
+  providers: [PrismaService, MaintenanceService, MembershipService],
+  exports: [PrismaService, MembershipService],
 })
 export class AppModule {}

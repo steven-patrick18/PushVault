@@ -6,6 +6,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Put,
   UseGuards,
 } from "@nestjs/common";
 import {
@@ -111,5 +112,19 @@ export class PropertiesController {
   @Get(":id/pages")
   pages(@CurrentUser() user: AuthUser, @Param("id", ParseUUIDPipe) id: string) {
     return this.properties.pages(user, id);
+  }
+
+  @Get(":id/auto-assign")
+  autoAssign(@CurrentUser() user: AuthUser, @Param("id", ParseUUIDPipe) id: string) {
+    return this.properties.getAutoAssign(user, id);
+  }
+
+  @Put(":id/auto-assign")
+  setAutoAssign(
+    @CurrentUser() user: AuthUser,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() body: { status: "active" | "paused"; rules: { segmentId: string; weight: number }[] } | null,
+  ) {
+    return this.properties.setAutoAssign(user, id, body);
   }
 }

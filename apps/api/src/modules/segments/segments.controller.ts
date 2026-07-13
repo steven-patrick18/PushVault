@@ -16,6 +16,7 @@ import { PrismaService } from "../../infra/prisma.service";
 import { AuthUser, CurrentUser, JwtAuthGuard, propertyScope } from "../../common/auth.guard";
 import { compileCriteria, segmentAudienceWhere, SegmentCriteria } from "./segment-compiler";
 import { SubscriberFilterParams, buildSubscriberWhere } from "../../common/subscriber-filters";
+import { MembershipService } from "./membership.service";
 
 // cumulative "last X" windows for blast activity, in minutes
 const ACTIVITY_WINDOWS = [
@@ -58,7 +59,10 @@ class UpdateSegmentDto {
 @Controller("segments")
 @UseGuards(JwtAuthGuard)
 export class SegmentsController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly membership: MembershipService,
+  ) {}
 
   private db(user: AuthUser) {
     return this.prisma.forTenant(user.tenantId);
@@ -272,7 +276,12 @@ export class SegmentsController {
     if (!segment) throw new NotFoundException("Segment not found");
     if (op === "add") {
       // one lead lives in exactly one segment: adding here evicts it everywhere else
-      const moved = await this.exclusiveAssign(user, segment, [subscriberId]);
+      const moved = await this.membership.exclusiveAssign(
+        user.tenantId,
+        segment.propertyId,
+        segment.id,
+        [subscriberId],
+      );
       await this.audit(user, "segment.member_add", id, null, { subscriberId, evictedFromOthers: moved });
     } else {
       const criteria = (segment.criteria as SegmentCriteria) ?? {};
@@ -287,47 +296,6 @@ export class SegmentsController {
       await this.audit(user, "segment.member_remove", id, null, { subscriberId });
     }
     return { ok: true };
-  }
-
-  /**
-   * Exclusive membership: put `ids` in `target` and pull them out of every
-   * other segment of the same property (manual_exclude beats any filter).
-   */
-  private async exclusiveAssign(
-    user: AuthUser,
-    target: { id: string; propertyId: string; criteria: unknown },
-    ids: string[],
-  ): Promise<number> {
-    const db = this.db(user);
-    const idSet = new Set(ids);
-    const siblings = await db.segment.findMany({ where: { propertyId: target.propertyId } });
-    let touchedOthers = 0;
-    for (const seg of siblings) {
-      const criteria = (seg.criteria as SegmentCriteria) ?? {};
-      const include = new Set(criteria.manual_include ?? []);
-      const exclude = new Set(criteria.manual_exclude ?? []);
-      if (seg.id === target.id) {
-        for (const sid of idSet) {
-          include.add(sid);
-          exclude.delete(sid);
-        }
-      } else {
-        let changed = false;
-        for (const sid of idSet) {
-          if (include.has(sid)) { include.delete(sid); changed = true; }
-          if (!exclude.has(sid)) { exclude.add(sid); changed = true; }
-        }
-        if (!changed) continue;
-        touchedOthers++;
-      }
-      await db.segment.update({
-        where: { id: seg.id },
-        data: {
-          criteria: { ...criteria, manual_include: [...include], manual_exclude: [...exclude] } as any,
-        },
-      });
-    }
-    return touchedOthers;
   }
 
   /** Bulk assign: every lead matching the filters moves into this segment (exclusively). */
@@ -350,9 +318,10 @@ export class SegmentsController {
       take: 50_000,
     });
     if (matches.length === 0) return { assigned: 0, evictedFromOtherSegments: 0 };
-    const evicted = await this.exclusiveAssign(
-      user,
-      segment,
+    const evicted = await this.membership.exclusiveAssign(
+      user.tenantId,
+      segment.propertyId,
+      segment.id,
       matches.map((m) => m.id),
     );
     await this.audit(user, "segment.assign_filtered", id, null, {

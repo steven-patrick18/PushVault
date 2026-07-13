@@ -63,11 +63,24 @@ const EMPTY_FILTERS = {
   fresh: "",
 };
 
+interface AutoAssignRule {
+  segmentId: string;
+  weight: number;
+}
+interface AutoAssign {
+  status: "active" | "paused" | "stopped";
+  rules: AutoAssignRule[];
+  counts?: Record<string, number>;
+}
+
 export default function Subscribers() {
   const readOnly = getUser()?.role === "client";
   const [data, setData] = useState<ListResponse | null>(null);
   const [facets, setFacets] = useState<Facets | null>(null);
   const [segments, setSegments] = useState<{ id: string; name: string }[]>([]);
+  const [propertyId, setPropertyId] = useState("");
+  const [auto, setAuto] = useState<AutoAssign | null>(null);
+  const [autoRules, setAutoRules] = useState<{ segmentId: string; weight: string }[]>([]);
   const [filters, setFilters] = useState({ ...EMPTY_FILTERS });
   const [page, setPage] = useState(1);
   const [assignSegment, setAssignSegment] = useState("");
@@ -91,7 +104,40 @@ export default function Subscribers() {
   useEffect(() => {
     api<Facets>("/subscribers/facets").then(setFacets).catch(() => {});
     api<{ id: string; name: string }[]>("/segments").then(setSegments).catch(() => {});
+    api<{ id: string }[]>("/properties").then((p) => {
+      if (p[0]) {
+        setPropertyId(p[0].id);
+        api<AutoAssign>(`/properties/${p[0].id}/auto-assign`).then((a) => {
+          setAuto(a);
+          setAutoRules((a.rules ?? []).map((r) => ({ segmentId: r.segmentId, weight: String(r.weight) })));
+        }).catch(() => {});
+      }
+    }).catch(() => {});
   }, []);
+
+  async function saveAutoAssign(status: "active" | "paused") {
+    const rules = autoRules
+      .filter((r) => r.segmentId && Number(r.weight) > 0)
+      .map((r) => ({ segmentId: r.segmentId, weight: Number(r.weight) }));
+    if (status === "active" && rules.length === 0) {
+      setError("Add at least one segment with a weight to activate auto-assign");
+      return;
+    }
+    const res = await api<AutoAssign>(`/properties/${propertyId}/auto-assign`, {
+      method: "PUT",
+      body: JSON.stringify({ status, rules }),
+    });
+    setAuto(res);
+    setMsg(status === "active" ? "Auto-assign is running — every new lead will be distributed" : "Auto-assign paused");
+  }
+
+  async function stopAutoAssign() {
+    if (!confirm("Stop and remove the auto-assign rule?")) return;
+    await api(`/properties/${propertyId}/auto-assign`, { method: "PUT", body: "null" });
+    setAuto({ status: "stopped", rules: [], counts: {} });
+    setAutoRules([]);
+    setMsg("Auto-assign stopped");
+  }
 
   function setFilter(key: keyof typeof EMPTY_FILTERS, value: string) {
     setFilters((f) => ({ ...f, [key]: value }));
@@ -277,6 +323,69 @@ export default function Subscribers() {
           </div>
         )}
       </div>
+
+      {/* auto-assign new leads */}
+      {!readOnly && (
+        <div className="panel">
+          <div className="flex-between">
+            <h3>
+              🔁 Auto-assign new leads{" "}
+              {auto && (
+                <span className={"badge " + (auto.status === "active" ? "green" : auto.status === "paused" ? "amber" : "gray")}>
+                  {auto.status === "active" ? "running" : auto.status}
+                </span>
+              )}
+            </h3>
+            <div className="row-actions">
+              {auto?.status === "active" ? (
+                <button className="btn secondary small" onClick={() => saveAutoAssign("paused")}>⏸ Pause</button>
+              ) : (
+                <button className="btn small" onClick={() => saveAutoAssign("active")}>▶ {auto?.status === "paused" ? "Resume" : "Activate"}</button>
+              )}
+              {auto && auto.status !== "stopped" && auto.rules?.length > 0 && (
+                <button className="btn secondary small" onClick={stopAutoAssign}>✕ Stop &amp; remove</button>
+              )}
+            </div>
+          </div>
+          <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 10 }}>
+            Every NEW subscriber is automatically placed into one of these segments (exclusive) using the
+            ratio below — e.g. weights 2 : 1 send two leads to the first segment for every one to the second.
+          </div>
+          {autoRules.map((r, i) => {
+            const totalWeight = autoRules.reduce((s, x) => s + (Number(x.weight) || 0), 0);
+            const share = totalWeight > 0 && Number(r.weight) > 0 ? Math.round((Number(r.weight) / totalWeight) * 100) : 0;
+            return (
+              <div key={i} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+                <select value={r.segmentId} style={{ width: 220 }}
+                  onChange={(e) => setAutoRules(autoRules.map((x, j) => (j === i ? { ...x, segmentId: e.target.value } : x)))}>
+                  <option value="">Choose segment…</option>
+                  {segments.map((s) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+                <span style={{ fontSize: 12, color: "var(--text-dim)" }}>weight</span>
+                <input type="number" min={1} style={{ width: 80 }} value={r.weight}
+                  onChange={(e) => setAutoRules(autoRules.map((x, j) => (j === i ? { ...x, weight: e.target.value } : x)))} />
+                <span className="badge purple">{share}%</span>
+                {auto?.counts?.[r.segmentId] !== undefined && (
+                  <span style={{ fontSize: 12, color: "var(--text-dim)" }}>
+                    {auto.counts[r.segmentId]} assigned so far
+                  </span>
+                )}
+                <button className="btn secondary small" onClick={() => setAutoRules(autoRules.filter((_, j) => j !== i))}>✕</button>
+              </div>
+            );
+          })}
+          <div style={{ display: "flex", gap: 8 }}>
+            <button className="btn secondary small" onClick={() => setAutoRules([...autoRules, { segmentId: "", weight: "1" }])}>
+              + Add segment to distribution
+            </button>
+            {autoRules.length > 0 && auto?.status === "active" && (
+              <button className="btn secondary small" onClick={() => saveAutoAssign("active")}>Save changes</button>
+            )}
+          </div>
+        </div>
+      )}
 
       <div className="panel">
         {!data || data.rows.length === 0 ? (

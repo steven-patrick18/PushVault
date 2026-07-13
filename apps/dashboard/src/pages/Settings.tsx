@@ -36,6 +36,8 @@ interface Billing {
   resetsAt: string;
   plans: { key: string; label: string; quota: number | null }[];
   stripeConfigured: boolean;
+  rates: { per_send: number; per_click: number; currency: string };
+  spend: { sent: number; clicked: number; sendCost: number; clickCost: number; total: number };
 }
 
 export default function Settings() {
@@ -50,12 +52,20 @@ export default function Settings() {
   const [properties, setProperties] = useState<{ id: string; name: string }[]>([]);
   const [showAddUser, setShowAddUser] = useState(false);
   const [newUser, setNewUser] = useState({ email: "", password: "", role: "manager", propertyIds: [] as string[] });
+  const [rates, setRates] = useState({ per_send: "0", per_click: "0", currency: "INR" });
 
   const load = () => {
     api<Tenant>("/tenant").then(setTenant).catch((e) => setError(e.message));
     api<User[]>("/users").then(setUsers).catch(() => {});
     api<AuditRow[]>("/audit").then(setAudit).catch(() => {});
-    api<Billing>("/billing").then(setBilling).catch(() => {});
+    api<Billing>("/billing").then((b) => {
+      setBilling(b);
+      setRates({
+        per_send: String(b.rates.per_send),
+        per_click: String(b.rates.per_click),
+        currency: b.rates.currency,
+      });
+    }).catch(() => {});
     api<{ id: string; name: string }[]>("/properties").then(setProperties).catch(() => {});
   };
   useEffect(load, []);
@@ -192,6 +202,59 @@ export default function Settings() {
             </div>
           </>
         )}
+      </div>
+
+      <div className="panel">
+        <h3>Pay-per-use rates &amp; spend (CDR billing)</h3>
+        <div style={{ display: "flex", gap: 12, alignItems: "flex-end", flexWrap: "wrap" }}>
+          <div>
+            <label>Rate per push sent</label>
+            <input type="number" min={0} step="0.01" style={{ width: 140 }} value={rates.per_send}
+              onChange={(e) => setRates({ ...rates, per_send: e.target.value })} />
+          </div>
+          <div>
+            <label>Rate per click (pay-per-click)</label>
+            <input type="number" min={0} step="0.01" style={{ width: 140 }} value={rates.per_click}
+              onChange={(e) => setRates({ ...rates, per_click: e.target.value })} />
+          </div>
+          <div>
+            <label>Currency</label>
+            <input style={{ width: 90 }} value={rates.currency} maxLength={3}
+              onChange={(e) => setRates({ ...rates, currency: e.target.value.toUpperCase() })} />
+          </div>
+          <button
+            className="btn secondary"
+            onClick={async () => {
+              await api("/tenant", {
+                method: "PATCH",
+                body: JSON.stringify({
+                  billingRates: {
+                    per_send: Number(rates.per_send) || 0,
+                    per_click: Number(rates.per_click) || 0,
+                    currency: rates.currency || "INR",
+                  },
+                }),
+              });
+              setMsg("Billing rates saved");
+              load();
+            }}
+          >
+            Save rates
+          </button>
+        </div>
+        {billing && (
+          <div style={{ marginTop: 14, fontSize: 13 }}>
+            <span className="badge green">
+              This month: {billing.rates.currency} {billing.spend.total.toLocaleString()}
+            </span>
+            <span style={{ color: "var(--text-dim)", marginLeft: 10 }}>
+              = {billing.spend.sent.toLocaleString()} sends × {billing.rates.per_send} + {billing.spend.clicked.toLocaleString()} clicks × {billing.rates.per_click}
+            </span>
+          </div>
+        )}
+        <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 8 }}>
+          Every campaign has a CDR (per-lead record with cost) on its page — export as CSV for invoicing clients.
+        </div>
       </div>
 
       <div className="panel">

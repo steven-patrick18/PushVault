@@ -31,6 +31,7 @@ import { AuthUser, CurrentUser, JwtAuthGuard, propertyScope } from "../../common
 import { CampaignRunnerService } from "./campaign-runner.service";
 import { PushService, PushError } from "./push.service";
 import { describeRecurrence, isRecurrence } from "./recurrence";
+import { normalizeRates } from "../settings/settings.controller";
 
 class CreateCampaignDto {
   @IsUUID()
@@ -407,6 +408,74 @@ export class CampaignsController {
         `Test send failed${code ? ` (push service returned ${code})` : ""}`,
       );
     }
+  }
+
+  /**
+   * CDR (Call/Contact Detail Records): one billing record per lead pushed,
+   * with pay-per-send + pay-per-click costs from the tenant's rates.
+   */
+  @Get(":id/cdr")
+  async cdr(
+    @CurrentUser() user: AuthUser,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Query("page") page = "1",
+    @Query("page_size") pageSize = "50",
+  ) {
+    const db = this.db(user);
+    const campaign = await db.campaign.findUnique({ where: { id }, select: { id: true } });
+    if (!campaign) throw new NotFoundException("Campaign not found");
+    const tenant = await db.tenant.findUnique({
+      where: { id: user.tenantId },
+      select: { billingRates: true },
+    });
+    const rates = normalizeRates(tenant?.billingRates);
+
+    const take = Math.min(Math.max(Number(pageSize) || 50, 1), 500);
+    const skip = (Math.max(Number(page) || 1, 1) - 1) * take;
+    const [rows, total, sentCount, clickCount] = await Promise.all([
+      db.send.findMany({
+        where: { campaignId: id },
+        orderBy: { createdAt: "asc" },
+        skip,
+        take,
+        select: {
+          id: true, status: true, variant: true, clicked: true,
+          errorCode: true, createdAt: true, sentAt: true, clickedAt: true,
+          subscriber: { select: { id: true, utmCampaign: true, device: true, country: true } },
+        },
+      }),
+      db.send.count({ where: { campaignId: id } }),
+      db.send.count({ where: { campaignId: id, status: "sent" } }),
+      db.send.count({ where: { campaignId: id, clicked: true } }),
+    ]);
+
+    return {
+      rates,
+      summary: {
+        records: total,
+        sent: sentCount,
+        clicked: clickCount,
+        sendCost: +(sentCount * rates.per_send).toFixed(2),
+        clickCost: +(clickCount * rates.per_click).toFixed(2),
+        total: +(sentCount * rates.per_send + clickCount * rates.per_click).toFixed(2),
+      },
+      rows: rows.map((r) => ({
+        id: r.id,
+        at: r.sentAt ?? r.createdAt,
+        status: r.status,
+        variant: r.variant,
+        clicked: r.clicked,
+        clickedAt: r.clickedAt,
+        errorCode: r.errorCode,
+        lead: r.subscriber,
+        cost: +(
+          (r.status === "sent" ? rates.per_send : 0) + (r.clicked ? rates.per_click : 0)
+        ).toFixed(4),
+      })),
+      total,
+      page: Number(page) || 1,
+      pageSize: take,
+    };
   }
 
   @Get(":id/report")

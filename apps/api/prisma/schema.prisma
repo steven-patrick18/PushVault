@@ -65,6 +65,7 @@ model Tenant {
   brandPrimaryColor String?   @map("brand_primary_color")
   customDomain      String?   @map("custom_domain")
   plan              String    @default("internal")
+  billingRates      Json?     @map("billing_rates") // {per_send, per_click, currency}
   status            String    @default("active")
   createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt         DateTime? @updatedAt @map("updated_at") @db.Timestamptz()
@@ -109,6 +110,7 @@ model Property {
   vapidPrivate        String?   @map("vapid_private")
   frequencyCapPerDay  Int       @default(2) @map("frequency_cap_per_day")
   frequencyCapPerWeek Int       @default(8) @map("frequency_cap_per_week")
+  autoAssign          Json?     @map("auto_assign") // {status, rules:[{segmentId,weight}], counts}
   monthlySendQuota    BigInt?   @map("monthly_send_quota")
   status              String    @default("active")
   apiKeyHash          String?   @map("api_key_hash")

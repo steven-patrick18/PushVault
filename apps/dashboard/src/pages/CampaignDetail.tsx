@@ -58,6 +58,26 @@ interface Report {
   revenue: { conversions: number; amount: number };
 }
 
+interface CdrRow {
+  id: string;
+  at: string;
+  status: string;
+  variant: string | null;
+  clicked: boolean;
+  errorCode: string | null;
+  lead: { id: string; utmCampaign: string | null; device: string | null; country: string | null };
+  cost: number;
+}
+
+interface Cdr {
+  rates: { per_send: number; per_click: number; currency: string };
+  summary: { records: number; sent: number; clicked: number; sendCost: number; clickCost: number; total: number };
+  rows: CdrRow[];
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
 const STATUS_BADGE: Record<string, string> = {
   draft: "gray", scheduled: "purple", sending: "amber", paused: "amber",
   sent: "green", cancelled: "gray", failed: "amber",
@@ -255,6 +275,8 @@ export default function CampaignDetail() {
   const [mixStrategy, setMixStrategy] = useState("mixed");
   const [targetAll, setTargetAll] = useState(false);
   const [pacing, setPacing] = useState("");
+  const [cdr, setCdr] = useState<Cdr | null>(null);
+  const [cdrPage, setCdrPage] = useState(1);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -291,6 +313,7 @@ export default function CampaignDetail() {
       setPacing(c.pacingPerMinute ? String(c.pacingPerMinute) : "");
       if (c.status !== "draft") {
         api<Report>(`/campaigns/${id}/report`).then(setReport).catch(() => {});
+        api<Cdr>(`/campaigns/${id}/cdr?page=${cdrPage}`).then(setCdr).catch(() => {});
       }
     }).catch((e) => setError(e.message));
     api<{ id: string; name: string }[]>("/segments").then(setSegments).catch(() => {});
@@ -399,6 +422,35 @@ export default function CampaignDetail() {
       }),
     });
     load();
+  }
+
+  useEffect(() => {
+    if (campaign && campaign.status !== "draft") {
+      api<Cdr>(`/campaigns/${id}/cdr?page=${cdrPage}`).then(setCdr).catch(() => {});
+    }
+  }, [id, cdrPage, campaign?.status]);
+
+  async function exportCdrCsv() {
+    setMsg("Exporting CDR…");
+    const lines = ["send_id,timestamp,status,variant,clicked,error,lead_id,lead_campaign,device,country,cost"];
+    let p = 1;
+    for (;;) {
+      const batch = await api<Cdr>(`/campaigns/${id}/cdr?page=${p}&page_size=500`);
+      for (const r of batch.rows) {
+        lines.push(
+          [r.id, r.at, r.status, r.variant ?? "", r.clicked, r.errorCode ?? "", r.lead.id, r.lead.utmCampaign ?? "", r.lead.device ?? "", r.lead.country ?? "", r.cost].join(","),
+        );
+      }
+      if (p * batch.pageSize >= batch.total || p >= 40) break;
+      p++;
+    }
+    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = `cdr-${campaign?.name.replace(/\W+/g, "-")}.csv`;
+    a.click();
+    URL.revokeObjectURL(a.href);
+    setMsg(`CDR exported (${lines.length - 1} records)`);
   }
 
   async function duplicate() {
@@ -518,6 +570,62 @@ export default function CampaignDetail() {
               </tbody>
             </table>
           </div>
+
+          {cdr && campaign.status !== "draft" && (
+            <div className="panel">
+              <div className="flex-between">
+                <h3>💳 Billing — CDR (per-lead records)</h3>
+                <button className="btn secondary small" onClick={exportCdrCsv}>⬇ Export CSV</button>
+              </div>
+              <div style={{ marginBottom: 12, fontSize: 13 }}>
+                <span className="badge green">
+                  Campaign cost: {cdr.rates.currency} {cdr.summary.total.toLocaleString()}
+                </span>
+                <span style={{ color: "var(--text-dim)", marginLeft: 10 }}>
+                  = {cdr.summary.sent.toLocaleString()} sends × {cdr.rates.per_send} + {cdr.summary.clicked.toLocaleString()} clicks × {cdr.rates.per_click} (pay-per-click)
+                </span>
+              </div>
+              <table>
+                <thead>
+                  <tr>
+                    <th>Time</th>
+                    <th>Lead</th>
+                    <th>Status</th>
+                    <th>Variant</th>
+                    <th>Clicked</th>
+                    <th>Cost</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {cdr.rows.map((r) => (
+                    <tr key={r.id}>
+                      <td style={{ fontSize: 12 }}>{new Date(r.at).toLocaleString()}</td>
+                      <td style={{ fontSize: 12 }}>
+                        <span className="commit-hash">{r.lead.id.slice(0, 8)}</span> {r.lead.utmCampaign ?? "direct"} · {r.lead.device ?? "–"}{r.lead.country ? ` · ${r.lead.country}` : ""}
+                      </td>
+                      <td>
+                        <span className={"badge " + (r.status === "sent" ? "green" : r.status === "expired" ? "amber" : "gray")}>
+                          {r.status}{r.errorCode ? ` (${r.errorCode})` : ""}
+                        </span>
+                      </td>
+                      <td>{r.variant ?? "–"}</td>
+                      <td>{r.clicked ? "✔" : "–"}</td>
+                      <td>{r.cost > 0 ? `${cdr.rates.currency} ${r.cost}` : "–"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              {cdr.total > cdr.pageSize && (
+                <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 10 }}>
+                  <button className="btn secondary small" disabled={cdrPage <= 1} onClick={() => setCdrPage(cdrPage - 1)}>← Prev</button>
+                  <span style={{ color: "var(--text-dim)", fontSize: 12 }}>
+                    {cdr.total.toLocaleString()} records · page {cdrPage} of {Math.ceil(cdr.total / cdr.pageSize)}
+                  </span>
+                  <button className="btn secondary small" disabled={cdrPage >= Math.ceil(cdr.total / cdr.pageSize)} onClick={() => setCdrPage(cdrPage + 1)}>Next →</button>
+                </div>
+              )}
+            </div>
+          )}
 
           {report?.variants && (
             <div className="panel">

@@ -8,6 +8,7 @@ import { UAParser } from "ua-parser-js";
 import { PrismaService } from "../../infra/prisma.service";
 import { GeoService } from "./geo.service";
 import { AutomationsService } from "../automations/automations.service";
+import { MembershipService } from "../segments/membership.service";
 
 interface SubscribeInput {
   property_key: string;
@@ -25,6 +26,7 @@ export class PublicService {
     private readonly prisma: PrismaService,
     private readonly geo: GeoService,
     private readonly automations: AutomationsService,
+    private readonly membership: MembershipService,
   ) {}
 
   /** Resolve property by key and validate the request Origin against its domains. */
@@ -121,10 +123,13 @@ export class PublicService {
       },
     });
 
-    // new subscriber → kick off drip automations (welcome series)
+    // new subscriber → kick off drip automations + auto-assign distribution
     if (!existing) {
       void this.automations
         .enqueueForSubscriber(property.tenantId, property.id, subscriber.id)
+        .catch(() => undefined);
+      void this.membership
+        .autoAssignNewLead(property.tenantId, property.id, subscriber.id)
         .catch(() => undefined);
     }
 

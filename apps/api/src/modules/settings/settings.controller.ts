@@ -22,6 +22,16 @@ class UpdateTenantDto {
   @IsOptional() @IsString() brandLogoUrl?: string;
   @IsOptional() @IsString() brandPrimaryColor?: string;
   @IsOptional() @IsIn(["internal", "free", "pro", "scale"]) plan?: string;
+  // pay-per-use rates: {per_send, per_click, currency}
+  @IsOptional() billingRates?: { per_send?: number; per_click?: number; currency?: string };
+}
+
+export function normalizeRates(raw: any): { per_send: number; per_click: number; currency: string } {
+  return {
+    per_send: Math.max(0, Number(raw?.per_send) || 0),
+    per_click: Math.max(0, Number(raw?.per_click) || 0),
+    currency: (raw?.currency ?? "INR").toString().toUpperCase().slice(0, 3),
+  };
 }
 
 class CreateUserDto {
@@ -65,9 +75,11 @@ export class SettingsController {
   @Patch("tenant")
   async updateTenant(@CurrentUser() user: AuthUser, @Body() dto: UpdateTenantDto) {
     const db = this.prisma.forTenant(user.tenantId);
+    const data: any = { ...dto };
+    if (dto.billingRates !== undefined) data.billingRates = normalizeRates(dto.billingRates);
     const tenant = await db.tenant.update({
       where: { id: user.tenantId },
-      data: dto,
+      data,
       select: { id: true, name: true, brandName: true, brandLogoUrl: true, brandPrimaryColor: true },
     });
     await db.auditLog.create({
@@ -139,18 +151,31 @@ export class SettingsController {
     return { ok: true };
   }
 
-  /** Billing: plan, quota and current-month usage (Stripe checkout is stubbed). */
+  /** Billing: plan, quota, current-month usage and pay-per-use spend. */
   @Get("billing")
   async billing(@CurrentUser() user: AuthUser) {
     const db = this.prisma.forTenant(user.tenantId);
     const tenant = await db.tenant.findUnique({
       where: { id: user.tenantId },
-      select: { plan: true },
+      select: { plan: true, billingRates: true },
     });
     const plan = tenant?.plan ?? "internal";
     const quota = PLAN_QUOTAS[plan] ?? null;
-    const used = await db.send.count({ where: { createdAt: { gte: monthStart() } } });
+    const rates = normalizeRates(tenant?.billingRates);
+    const [used, sentMonth, clickedMonth] = await Promise.all([
+      db.send.count({ where: { createdAt: { gte: monthStart() } } }),
+      db.send.count({ where: { createdAt: { gte: monthStart() }, status: "sent" } }),
+      db.send.count({ where: { createdAt: { gte: monthStart() }, clicked: true } }),
+    ]);
     return {
+      rates,
+      spend: {
+        sent: sentMonth,
+        clicked: clickedMonth,
+        sendCost: +(sentMonth * rates.per_send).toFixed(2),
+        clickCost: +(clickedMonth * rates.per_click).toFixed(2),
+        total: +(sentMonth * rates.per_send + clickedMonth * rates.per_click).toFixed(2),
+      },
       plan,
       planLabel: PLAN_LABELS[plan] ?? plan,
       quota,
