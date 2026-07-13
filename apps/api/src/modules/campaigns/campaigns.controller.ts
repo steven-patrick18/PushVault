@@ -14,6 +14,7 @@ import {
 import {
   IsArray,
   IsDateString,
+  IsIn,
   IsInt,
   IsObject,
   IsOptional,
@@ -66,6 +67,15 @@ class CreateCampaignDto {
   segmentId?: string;
 
   @IsOptional()
+  @IsArray()
+  @IsUUID(undefined, { each: true })
+  segmentIds?: string[];
+
+  @IsOptional()
+  @IsIn(["mixed", "sequential", "zone"])
+  mixStrategy?: string;
+
+  @IsOptional()
   @IsInt()
   @Min(1)
   pacingPerMinute?: number;
@@ -83,6 +93,8 @@ class UpdateCampaignDto {
   @IsOptional() @IsString() iconUrl?: string;
   @IsOptional() @IsString() imageUrl?: string;
   @IsOptional() @IsArray() actions?: unknown[];
+  @IsOptional() @IsArray() @IsUUID(undefined, { each: true }) segmentIds?: string[];
+  @IsOptional() @IsIn(["mixed", "sequential", "zone"]) mixStrategy?: string;
   // null = unassign segment (target all active subscribers)
   @IsOptional() @ValidateIf((_, v) => v !== null) @IsUUID() segmentId?: string | null;
   // null = full speed
@@ -153,6 +165,8 @@ export class CampaignsController {
         imageUrl: dto.imageUrl ?? null,
         actions: (dto.actions as any) ?? undefined,
         segmentId: dto.segmentId ?? null,
+        segmentIds: dto.segmentIds ?? [],
+        mixStrategy: dto.mixStrategy ?? "mixed",
         pacingPerMinute: dto.pacingPerMinute ?? null,
         abConfig: (dto.abConfig as any) ?? undefined,
       },
@@ -216,6 +230,90 @@ export class CampaignsController {
       schedule_at: at.toISOString(),
       recurrence: dto.recurrence ? describeRecurrence(dto.recurrence as any) : null,
     };
+  }
+
+  /** Pause an active blast — queued sends wait until resume. */
+  @Post(":id/pause")
+  async pause(@CurrentUser() user: AuthUser, @Param("id", ParseUUIDPipe) id: string) {
+    const campaign = await this.db(user).campaign.findUnique({ where: { id } });
+    if (!campaign) throw new NotFoundException("Campaign not found");
+    await this.runner.pause(id);
+    await this.audit(user, "campaign.pause", id);
+    return { ok: true, status: "paused" };
+  }
+
+  @Post(":id/resume")
+  async resume(@CurrentUser() user: AuthUser, @Param("id", ParseUUIDPipe) id: string) {
+    const campaign = await this.db(user).campaign.findUnique({ where: { id } });
+    if (!campaign) throw new NotFoundException("Campaign not found");
+    await this.audit(user, "campaign.resume", id);
+    void this.runner.resume(id);
+    return { ok: true, status: "sending" };
+  }
+
+  /** Vicidial-style live monitor: counters + rate + ETA, polled by the Basic view. */
+  @Get(":id/live")
+  async live(@CurrentUser() user: AuthUser, @Param("id", ParseUUIDPipe) id: string) {
+    const db = this.db(user);
+    const campaign = await db.campaign.findUnique({
+      where: { id },
+      select: {
+        status: true, startedAt: true, finishedAt: true, pacingPerMinute: true,
+        totalTargeted: true, name: true, scheduleAt: true,
+      },
+    });
+    if (!campaign) throw new NotFoundException("Campaign not found");
+    const minuteAgo = new Date(Date.now() - 60_000);
+    const [statusCounts, clicked, sentLastMin] = await Promise.all([
+      db.send.groupBy({ by: ["status"], where: { campaignId: id }, _count: { status: true } }),
+      db.send.count({ where: { campaignId: id, clicked: true } }),
+      db.send.count({ where: { campaignId: id, status: "sent", sentAt: { gte: minuteAgo } } }),
+    ]);
+    const map = Object.fromEntries(statusCounts.map((c) => [c.status, c._count.status]));
+    const queued = map.queued ?? 0;
+    const sent = map.sent ?? 0;
+    const elapsedSec = campaign.startedAt
+      ? Math.round(((campaign.finishedAt ?? new Date()).getTime() - campaign.startedAt.getTime()) / 1000)
+      : 0;
+    return {
+      name: campaign.name,
+      status: campaign.status,
+      startedAt: campaign.startedAt,
+      scheduleAt: campaign.scheduleAt,
+      pacingPerMinute: campaign.pacingPerMinute,
+      targeted: campaign.totalTargeted ?? 0,
+      queued,
+      sent,
+      failed: map.failed ?? 0,
+      expired: map.expired ?? 0,
+      clicked,
+      ctr: sent > 0 ? +((clicked / sent) * 100).toFixed(2) : null,
+      sentLastMin,
+      elapsedSec,
+      etaMinutes: queued > 0 ? Math.ceil(queued / Math.max(sentLastMin, 1)) : 0,
+    };
+  }
+
+  /** Live audience size for a set of segments with dedup (union). */
+  @Post("audience-count")
+  async audienceCount(
+    @CurrentUser() user: AuthUser,
+    @Body() body: { propertyId: string; segmentIds?: string[] },
+  ) {
+    const db = this.db(user);
+    if (!body.segmentIds?.length) {
+      const count = await db.subscriber.count({
+        where: { propertyId: body.propertyId, status: "active" },
+      });
+      return { count };
+    }
+    const segments = await db.segment.findMany({ where: { id: { in: body.segmentIds } } });
+    const { segmentAudienceWhere } = await import("../segments/segment-compiler");
+    const ors = segments.map((s) => segmentAudienceWhere(s.criteria as any));
+    const count = await db.subscriber.count({
+      where: { propertyId: body.propertyId, status: "active", OR: ors },
+    });
+    return { count };
   }
 
   @Post(":id/cancel")

@@ -16,6 +16,15 @@ interface AbConfig {
   variantB?: { title?: string; body?: string };
 }
 
+/** Notification action; call buttons may carry a number pool with routing. */
+interface CampaignAction {
+  action: string;
+  title: string;
+  url?: string;
+  numbers?: string[];
+  strategy?: "round_robin" | "random";
+}
+
 /**
  * The send engine (§7). In-process implementation of the orchestrator +
  * per-tenant send workers; the TaskPool-per-tenant layout mirrors BullMQ's
@@ -28,13 +37,14 @@ export class CampaignRunnerService implements OnModuleInit {
   private readonly scheduledTimers = new Map<string, NodeJS.Timeout>();
   private readonly remaining = new Map<string, number>();
   private consumedMap = new Map<string, number>();
+  private readonly paused = new Set<string>();
 
   constructor(
     private readonly prisma: PrismaService,
     private readonly push: PushService,
   ) {}
 
-  /** Re-arm scheduled campaigns after a restart. */
+  /** Re-arm scheduled campaigns and resume interrupted blasts after a restart. */
   async onModuleInit() {
     const scheduled = await this.prisma.system.campaign.findMany({
       where: { status: "scheduled", scheduleAt: { not: null } },
@@ -42,6 +52,16 @@ export class CampaignRunnerService implements OnModuleInit {
     for (const c of scheduled) {
       this.armSchedule(c.id, c.scheduleAt!);
       this.logger.log(`Re-armed scheduled campaign ${c.id} for ${c.scheduleAt!.toISOString()}`);
+    }
+    const interrupted = await this.prisma.system.campaign.findMany({
+      where: { status: "sending" },
+      select: { id: true },
+    });
+    for (const c of interrupted) {
+      this.logger.warn(`Resuming interrupted blast ${c.id}`);
+      void this.resume(c.id, true).catch((e) =>
+        this.logger.error(`Auto-resume failed for ${c.id}: ${e.message}`),
+      );
     }
   }
 
@@ -74,11 +94,6 @@ export class CampaignRunnerService implements OnModuleInit {
     }
   }
 
-  /**
-   * A scheduled campaign fired. One-shot campaigns dispatch directly;
-   * recurring campaigns dispatch a cloned occurrence and re-arm the parent
-   * for the next occurrence.
-   */
   async fireScheduled(campaignId: string): Promise<void> {
     const campaign = await this.prisma.system.campaign.findUnique({ where: { id: campaignId } });
     if (!campaign || campaign.status !== "scheduled") return;
@@ -102,6 +117,8 @@ export class CampaignRunnerService implements OnModuleInit {
         clickUrl: campaign.clickUrl,
         actions: campaign.actions as any,
         segmentId: campaign.segmentId,
+        segmentIds: campaign.segmentIds,
+        mixStrategy: campaign.mixStrategy,
         abConfig: campaign.abConfig as any,
         pacingPerMinute: campaign.pacingPerMinute,
         status: "draft",
@@ -113,15 +130,84 @@ export class CampaignRunnerService implements OnModuleInit {
     );
 
     const next = nextOccurrence(campaign.scheduleAt ?? new Date(), rec);
-    await db.campaign.update({
-      where: { id: campaign.id },
-      data: { scheduleAt: next },
-    });
+    await db.campaign.update({ where: { id: campaign.id }, data: { scheduleAt: next } });
     this.armSchedule(campaign.id, next);
-    this.logger.log(`Recurring campaign ${campaign.id} re-armed for ${next.toISOString()}`);
   }
 
-  /** Monthly plan quota remaining for a tenant (null = unlimited). */
+  /** Pause an active blast: queued sends stay queued, workers stop picking up. */
+  async pause(campaignId: string): Promise<void> {
+    const campaign = await this.prisma.system.campaign.findUnique({ where: { id: campaignId } });
+    if (!campaign) throw new BadRequestException("Campaign not found");
+    if (campaign.status !== "sending") {
+      throw new BadRequestException(`Campaign is ${campaign.status}, only sending campaigns can pause`);
+    }
+    this.paused.add(campaignId);
+    this.remaining.delete(campaignId);
+    this.consumedMap.delete(campaignId);
+    await this.prisma.forTenant(campaign.tenantId).campaign.update({
+      where: { id: campaignId },
+      data: { status: "paused" },
+    });
+    this.logger.log(`Campaign ${campaignId} paused`);
+  }
+
+  /** Resume a paused (or interrupted) blast: re-enqueue everything still queued. */
+  async resume(campaignId: string, fromBoot = false): Promise<void> {
+    const campaign = await this.prisma.system.campaign.findUnique({
+      where: { id: campaignId },
+      include: { property: true },
+    });
+    if (!campaign) throw new BadRequestException("Campaign not found");
+    if (!fromBoot && campaign.status !== "paused") {
+      throw new BadRequestException(`Campaign is ${campaign.status}, only paused campaigns can resume`);
+    }
+    this.paused.delete(campaignId);
+    const db = this.prisma.forTenant(campaign.tenantId);
+    await db.campaign.update({ where: { id: campaignId }, data: { status: "sending" } });
+
+    const { basePayload, variantBPayload } = this.buildPayloads(campaign);
+    const vapid = this.vapidOf(campaign.property);
+    const limiter = campaign.pacingPerMinute
+      ? new RateLimiter(60_000 / campaign.pacingPerMinute)
+      : null;
+
+    this.remaining.set(campaignId, Number.MAX_SAFE_INTEGER);
+    let cursor: string | undefined;
+    let requeued = 0;
+    for (;;) {
+      const queued = await db.send.findMany({
+        where: { campaignId, status: "queued" },
+        include: { subscriber: { select: { id: true, endpoint: true, p256dh: true, auth: true, status: true } } },
+        orderBy: { id: "asc" },
+        take: BATCH_SIZE,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      });
+      if (queued.length === 0) break;
+      cursor = queued[queued.length - 1].id;
+      const pool = this.pool(campaign.tenantId);
+      for (const send of queued) {
+        if (send.subscriber.status !== "active") {
+          await db.send.update({ where: { id: send.id }, data: { status: "failed", errorCode: "inactive" } });
+          continue;
+        }
+        const payload = send.variant === "B" && variantBPayload ? variantBPayload : basePayload;
+        pool.add(() =>
+          this.processSend(db, campaignId, campaign.tenantId, send.id, send.subscriber, {
+            ...payload,
+            actions: this.resolveActions(campaign.actions as any, requeued),
+            send_id: send.id,
+          }, limiter, vapid),
+        );
+        requeued++;
+      }
+    }
+    this.remaining.set(campaignId, requeued === 0 ? 0 : requeued - this.consumed(campaignId));
+    if ((this.remaining.get(campaignId) ?? 0) <= 0) {
+      await this.finalize(campaignId, campaign.tenantId);
+    }
+    this.logger.log(`Campaign ${campaignId} resumed with ${requeued} queued sends`);
+  }
+
   async quotaRemaining(tenantId: string): Promise<number | null> {
     const tenant = await this.prisma.system.tenant.findUnique({
       where: { id: tenantId },
@@ -135,24 +221,135 @@ export class CampaignRunnerService implements OnModuleInit {
     return Math.max(0, quota - used);
   }
 
+  private buildPayloads(campaign: any) {
+    const abRaw = campaign.abConfig as AbConfig | null;
+    const ab = abRaw?.enabled ? abRaw : null;
+    const basePayload = {
+      title: campaign.title,
+      body: campaign.body,
+      icon: campaign.iconUrl ?? campaign.property.iconUrl,
+      image: campaign.imageUrl,
+      url: campaign.clickUrl,
+    };
+    const variantBPayload = ab
+      ? { ...basePayload, title: ab.variantB?.title || campaign.title, body: ab.variantB?.body || campaign.body }
+      : null;
+    return { basePayload, variantBPayload, ab };
+  }
+
+  private vapidOf(property: any): VapidOverride | null {
+    return property.vapidPublic && property.vapidPrivate
+      ? { publicKey: property.vapidPublic, privateKey: property.vapidPrivate }
+      : null;
+  }
+
+  /** Per-send action resolution: call pools pick a number per lead. */
+  resolveActions(actions: CampaignAction[] | null, index: number): any[] | undefined {
+    if (!actions?.length) return undefined;
+    return actions.map((a) => {
+      if (a.numbers?.length) {
+        const n =
+          a.strategy === "random"
+            ? a.numbers[Math.floor(Math.random() * a.numbers.length)]
+            : a.numbers[index % a.numbers.length];
+        return { action: a.action, title: a.title, url: `tel:${n}` };
+      }
+      return { action: a.action, title: a.title, url: a.url };
+    });
+  }
+
+  /**
+   * Multi-segment audience with lead-mix strategy:
+   *  - mixed: interleave leads across segments evenly
+   *  - sequential: finish segment 1, then 2, ...
+   *  - zone: group leads by timezone (send zone by zone)
+   * Returns ordered subscriber ids, or null when no segments (stream all).
+   */
+  private async resolveAudienceOrder(
+    db: TenantClient,
+    campaign: any,
+  ): Promise<string[] | null> {
+    const segmentIds: string[] =
+      campaign.segmentIds?.length > 0
+        ? campaign.segmentIds
+        : campaign.segmentId
+          ? [campaign.segmentId]
+          : [];
+    if (segmentIds.length === 0) return null;
+
+    const segments = await db.segment.findMany({ where: { id: { in: segmentIds } } });
+    // preserve the order segments were attached in
+    const ordered = segmentIds
+      .map((id) => segments.find((s) => s.id === id))
+      .filter(Boolean) as typeof segments;
+
+    const lists: { id: string; timezone: string | null }[][] = [];
+    for (const seg of ordered) {
+      const rows = await db.subscriber.findMany({
+        where: {
+          ...segmentAudienceWhere(seg.criteria as SegmentCriteria),
+          propertyId: campaign.propertyId,
+          status: "active",
+        },
+        select: { id: true, timezone: true },
+        orderBy: { id: "asc" },
+      });
+      lists.push(rows);
+    }
+
+    const seen = new Set<string>();
+    const result: { id: string; timezone: string | null }[] = [];
+
+    if (campaign.mixStrategy === "sequential") {
+      for (const list of lists) {
+        for (const row of list) {
+          if (!seen.has(row.id)) { seen.add(row.id); result.push(row); }
+        }
+      }
+    } else {
+      // round-robin interleave (also the base order for zone)
+      const idx = lists.map(() => 0);
+      for (;;) {
+        let advanced = false;
+        for (let l = 0; l < lists.length; l++) {
+          while (idx[l] < lists[l].length && seen.has(lists[l][idx[l]].id)) idx[l]++;
+          if (idx[l] < lists[l].length) {
+            const row = lists[l][idx[l]++];
+            seen.add(row.id);
+            result.push(row);
+            advanced = true;
+          }
+        }
+        if (!advanced) break;
+      }
+    }
+
+    if (campaign.mixStrategy === "zone") {
+      // stable sort by timezone so each zone completes before the next begins
+      result.sort((a, b) => (a.timezone ?? "zzz").localeCompare(b.timezone ?? "zzz"));
+    }
+
+    return result.map((r) => r.id);
+  }
+
   /** Orchestrator: `campaign:dispatch` */
   async dispatch(campaignId: string): Promise<void> {
     const campaign = await this.prisma.system.campaign.findUnique({
       where: { id: campaignId },
-      include: { segment: true, property: true },
+      include: { property: true },
     });
     if (!campaign) throw new Error("Campaign not found");
     if (!["draft", "scheduled"].includes(campaign.status)) {
       throw new Error(`Campaign is ${campaign.status}, cannot dispatch`);
     }
 
-    // plan quota enforcement (Phase 3 billing)
     let remainingQuota = await this.quotaRemaining(campaign.tenantId);
     if (remainingQuota !== null && remainingQuota <= 0) {
       throw new BadRequestException("Monthly push quota exhausted — upgrade the plan in Settings");
     }
 
     const db = this.prisma.forTenant(campaign.tenantId);
+    this.paused.delete(campaignId);
     await db.campaign.update({
       where: { id: campaign.id },
       data: {
@@ -165,33 +362,8 @@ export class CampaignRunnerService implements OnModuleInit {
       },
     });
 
-    const segmentWhere = campaign.segment
-      ? segmentAudienceWhere(campaign.segment.criteria as SegmentCriteria)
-      : {};
-
-    const abRaw = campaign.abConfig as unknown as AbConfig | null;
-    const ab = abRaw?.enabled ? abRaw : null;
-    const basePayload = {
-      title: campaign.title,
-      body: campaign.body,
-      icon: campaign.iconUrl ?? campaign.property.iconUrl,
-      image: campaign.imageUrl,
-      url: campaign.clickUrl,
-      actions: (campaign.actions as any) ?? undefined,
-    };
-    const variantBPayload = ab
-      ? {
-          ...basePayload,
-          title: ab.variantB?.title || campaign.title,
-          body: ab.variantB?.body || campaign.body,
-        }
-      : null;
-
-    const vapid: VapidOverride | null =
-      campaign.property.vapidPublic && campaign.property.vapidPrivate
-        ? { publicKey: campaign.property.vapidPublic, privateKey: campaign.property.vapidPrivate }
-        : null;
-
+    const { basePayload, variantBPayload, ab } = this.buildPayloads(campaign);
+    const vapid = this.vapidOf(campaign.property);
     const limiter = campaign.pacingPerMinute
       ? new RateLimiter(60_000 / campaign.pacingPerMinute)
       : null;
@@ -201,21 +373,40 @@ export class CampaignRunnerService implements OnModuleInit {
     const dayAgo = new Date(Date.now() - 86400_000);
     const weekAgo = new Date(Date.now() - 7 * 86400_000);
 
+    const orderedIds = await this.resolveAudienceOrder(db, campaign);
+
     let cursor: string | undefined;
+    let orderedPos = 0;
     let targeted = 0;
     let quotaHit = false;
-    this.remaining.set(campaign.id, Number.MAX_SAFE_INTEGER); // sentinel while streaming
+    this.remaining.set(campaign.id, Number.MAX_SAFE_INTEGER);
 
     for (;;) {
-      const batch = await db.subscriber.findMany({
-        where: { ...segmentWhere, propertyId: campaign.propertyId, status: "active" },
-        select: { id: true, endpoint: true, p256dh: true, auth: true },
-        orderBy: { id: "asc" },
-        take: BATCH_SIZE,
-        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
-      });
-      if (batch.length === 0) break;
-      cursor = batch[batch.length - 1].id;
+      if (this.paused.has(campaign.id)) break; // paused mid-stream: stop targeting more
+
+      let batch: { id: string; endpoint: string; p256dh: string; auth: string }[];
+      if (orderedIds) {
+        const chunk = orderedIds.slice(orderedPos, orderedPos + BATCH_SIZE);
+        orderedPos += chunk.length;
+        if (chunk.length === 0) break;
+        const rows = await db.subscriber.findMany({
+          where: { id: { in: chunk }, status: "active" },
+          select: { id: true, endpoint: true, p256dh: true, auth: true },
+        });
+        const byId = new Map(rows.map((r) => [r.id, r]));
+        batch = chunk.map((id) => byId.get(id)).filter(Boolean) as typeof rows;
+      } else {
+        batch = await db.subscriber.findMany({
+          where: { propertyId: campaign.propertyId, status: "active" },
+          select: { id: true, endpoint: true, p256dh: true, auth: true },
+          orderBy: { id: "asc" },
+          take: BATCH_SIZE,
+          ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+        });
+        if (batch.length === 0) break;
+        cursor = batch[batch.length - 1].id;
+      }
+      if (batch.length === 0) continue;
 
       // frequency caps (server-side, §7 step 3)
       const ids = batch.map((s) => s.id);
@@ -238,7 +429,6 @@ export class CampaignRunnerService implements OnModuleInit {
       );
       if (eligible.length === 0) continue;
 
-      // plan quota cap
       if (remainingQuota !== null) {
         if (remainingQuota <= 0) { quotaHit = true; break; }
         if (eligible.length > remainingQuota) {
@@ -264,16 +454,11 @@ export class CampaignRunnerService implements OnModuleInit {
         const sub = eligible[i];
         const payload = send.variant === "B" && variantBPayload ? variantBPayload : basePayload;
         pool.add(() =>
-          this.processSend(
-            db,
-            campaign.id,
-            campaign.tenantId,
-            send.id,
-            sub,
-            { ...payload, send_id: send.id },
-            limiter,
-            vapid,
-          ),
+          this.processSend(db, campaign.id, campaign.tenantId, send.id, sub, {
+            ...payload,
+            actions: this.resolveActions(campaign.actions as any, targeted + i),
+            send_id: send.id,
+          }, limiter, vapid),
         );
       }
       targeted += sendRows.length;
@@ -284,9 +469,11 @@ export class CampaignRunnerService implements OnModuleInit {
       where: { id: campaign.id },
       data: { totalTargeted: targeted },
     });
-    this.remaining.set(campaign.id, targeted === 0 ? 0 : targeted - this.consumed(campaign.id));
-    if ((this.remaining.get(campaign.id) ?? 0) <= 0) {
-      await this.finalize(campaign.id, campaign.tenantId);
+    if (!this.paused.has(campaign.id)) {
+      this.remaining.set(campaign.id, targeted === 0 ? 0 : targeted - this.consumed(campaign.id));
+      if ((this.remaining.get(campaign.id) ?? 0) <= 0) {
+        await this.finalize(campaign.id, campaign.tenantId);
+      }
     }
     this.logger.log(
       `Campaign ${campaign.id}: targeted ${targeted}${quotaHit ? " (capped by plan quota)" : ""}`,
@@ -303,7 +490,8 @@ export class CampaignRunnerService implements OnModuleInit {
       this.consumedMap.set(campaignId, this.consumed(campaignId) + 1);
       return;
     }
-    const next = (rem ?? 1) - 1;
+    if (rem === undefined) return; // paused: bookkeeping reset, resume re-counts
+    const next = rem - 1;
     this.remaining.set(campaignId, next);
     if (next <= 0) {
       await this.finalize(campaignId, tenantId);
@@ -314,6 +502,8 @@ export class CampaignRunnerService implements OnModuleInit {
     this.remaining.delete(campaignId);
     this.consumedMap.delete(campaignId);
     const db = this.prisma.forTenant(tenantId);
+    const current = await db.campaign.findUnique({ where: { id: campaignId }, select: { status: true } });
+    if (current?.status === "paused") return; // don't overwrite a pause
     const counts = await db.send.groupBy({
       by: ["status"],
       where: { campaignId },
@@ -327,7 +517,7 @@ export class CampaignRunnerService implements OnModuleInit {
         status: "sent",
         finishedAt: new Date(),
         totalSent: sent,
-        totalDelivered: sent, // v1: delivered = accepted by push service (§8)
+        totalDelivered: sent,
         totalFailed: map.get("failed") ?? 0,
         totalExpiredPruned: map.get("expired") ?? 0,
       },
@@ -346,8 +536,11 @@ export class CampaignRunnerService implements OnModuleInit {
     limiter: RateLimiter | null = null,
     vapid: VapidOverride | null = null,
   ): Promise<void> {
+    // paused: leave the send queued; resume() re-enqueues it
+    if (this.paused.has(campaignId)) return;
     try {
       if (limiter) await limiter.wait();
+      if (this.paused.has(campaignId)) return; // paused while waiting for pacing slot
       let attempt = 0;
       for (;;) {
         attempt++;
@@ -356,38 +549,31 @@ export class CampaignRunnerService implements OnModuleInit {
           break;
         } catch (e) {
           if (e instanceof PushError && e.statusCode === 429 && attempt < MAX_RETRIES) {
-            await sleep(1000 * 2 ** (attempt - 1)); // exponential backoff
+            await sleep(1000 * 2 ** (attempt - 1));
             continue;
           }
           throw e;
         }
       }
       const now = new Date();
-      await db.send.update({
-        where: { id: sendId },
-        data: { status: "sent", sentAt: now },
-      });
+      await db.send.update({ where: { id: sendId }, data: { status: "sent", sentAt: now } });
       await db.subscriber.update({
         where: { id: sub.id },
         data: { pushesReceived: { increment: 1 }, lastPushAt: now },
       });
-      // live progress for the dashboard while the blast is running
       await db.campaign.update({
         where: { id: campaignId },
         data: { totalSent: { increment: 1 }, totalDelivered: { increment: 1 } },
       });
+      await this.done(campaignId, tenantId);
     } catch (e) {
       const code = e instanceof PushError ? e.statusCode : null;
       if (code === 404 || code === 410) {
-        // dead token: prune immediately (§7)
         await db.send.update({
           where: { id: sendId },
           data: { status: "expired", errorCode: String(code) },
         });
-        await db.subscriber.update({
-          where: { id: sub.id },
-          data: { status: "expired" },
-        });
+        await db.subscriber.update({ where: { id: sub.id }, data: { status: "expired" } });
         await db.campaign.update({
           where: { id: campaignId },
           data: { totalExpiredPruned: { increment: 1 } },
@@ -402,7 +588,6 @@ export class CampaignRunnerService implements OnModuleInit {
           data: { totalFailed: { increment: 1 } },
         });
       }
-    } finally {
       await this.done(campaignId, tenantId);
     }
   }

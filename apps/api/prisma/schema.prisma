@@ -12,6 +12,7 @@ datasource db {
 enum UserRole {
   admin
   manager
+  operator // daily ops: run/pause campaigns + live reports, no content editing
   client
 
   @@map("user_role")
@@ -37,6 +38,7 @@ enum CampaignStatus {
   draft
   scheduled
   sending
+  paused
   sent
   cancelled
   failed
@@ -221,6 +223,8 @@ model Campaign {
   clickUrl           String         @map("click_url")
   actions            Json?
   segmentId          String?        @map("segment_id") @db.Uuid
+  segmentIds         String[]       @default([]) @map("segment_ids") @db.Uuid
+  mixStrategy        String         @default("mixed") @map("mix_strategy") // mixed | sequential | zone
   status             CampaignStatus @default(draft)
   pacingPerMinute    Int?           @map("pacing_per_minute")
   scheduleAt         DateTime?      @map("schedule_at") @db.Timestamptz()

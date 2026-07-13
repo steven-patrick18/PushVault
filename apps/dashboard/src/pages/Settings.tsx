@@ -239,6 +239,7 @@ export default function Settings() {
             <select value={newUser.role} onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}>
               <option value="admin">Admin — full access</option>
               <option value="manager">Manager — full access, no user management</option>
+              <option value="operator">Operator — run/pause campaigns + live reports only</option>
               <option value="client">Client — read-only portal, selected properties</option>
             </select>
             {newUser.role === "client" && (

@@ -32,8 +32,8 @@ class CreateUserDto {
   @MinLength(8)
   password: string;
 
-  @IsIn(["admin", "manager", "client"])
-  role: "admin" | "manager" | "client";
+  @IsIn(["admin", "manager", "operator", "client"])
+  role: "admin" | "manager" | "operator" | "client";
 
   @IsOptional()
   @IsArray()
