@@ -6,8 +6,10 @@ self.addEventListener("push", (e) => {
       body: d.body,
       icon: d.icon,
       image: d.image,
-      data: { url: d.url, send_id: d.send_id },
-      actions: d.actions || [],
+      // keep full actions (incl. per-action url / tel:) in data — the
+      // notification's own `actions` only carries {action, title}
+      data: { url: d.url, send_id: d.send_id, actions: d.actions || [] },
+      actions: (d.actions || []).map((a) => ({ action: a.action, title: a.title })),
     }),
   );
 });

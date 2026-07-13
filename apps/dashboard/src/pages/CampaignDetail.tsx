@@ -2,6 +2,12 @@ import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import { api } from "../api";
 
+interface CampaignAction {
+  action: string;
+  title: string;
+  url: string;
+}
+
 interface Campaign {
   id: string;
   propertyId: string;
@@ -11,6 +17,7 @@ interface Campaign {
   iconUrl: string | null;
   imageUrl: string | null;
   clickUrl: string;
+  actions: CampaignAction[] | null;
   status: string;
   scheduleAt: string | null;
   pacingPerMinute: number | null;
@@ -33,87 +40,178 @@ const STATUS_BADGE: Record<string, string> = {
   draft: "gray", scheduled: "purple", sending: "amber", sent: "green", cancelled: "gray", failed: "amber",
 };
 
+const EMOJI = ["🔥", "🎉", "✨", "🛍️", "💰", "⚡", "🔔", "🎁", "📢", "⏰"];
+
 type Platform = "windows" | "android" | "mac" | "ios";
 
-/** Stylized mockups of how the push popup renders on each OS. */
-function PlatformPreview({ platform, title, body, icon, image, domain }: {
-  platform: Platform; title: string; body: string; icon: string | null; image: string | null; domain: string;
-}) {
-  const iconEl = (size: number, radius = 8) =>
-    icon ? (
-      <img src={icon} style={{ width: size, height: size, borderRadius: radius, objectFit: "cover", flexShrink: 0 }} />
-    ) : (
-      <div style={{ width: size, height: size, borderRadius: radius, background: "#7C3AED33", display: "flex", alignItems: "center", justifyContent: "center", fontSize: size * 0.55, flexShrink: 0 }}>🔔</div>
-    );
+interface ActionRow {
+  kind: "url" | "call";
+  title: string;
+  value: string;
+}
 
-  if (platform === "windows") {
-    return (
-      <div>
-        <div style={{ background: "#1f1f1f", color: "#fff", borderRadius: 8, padding: 16, width: 330, boxShadow: "0 8px 30px rgba(0,0,0,.5)" }}>
-          <div style={{ display: "flex", gap: 12 }}>
-            {iconEl(44, 6)}
-            <div style={{ minWidth: 0 }}>
-              <div style={{ fontWeight: 600, fontSize: 14 }}>{title}</div>
-              <div style={{ fontSize: 13, color: "#c8c8c8", marginTop: 2 }}>{body}</div>
-              <div style={{ fontSize: 11, color: "#8a8a8a", marginTop: 6 }}>Google Chrome · {domain}</div>
-            </div>
-          </div>
-          {image && <img src={image} style={{ width: "100%", borderRadius: 6, marginTop: 12 }} />}
-        </div>
-        <div className="preview-note">Windows 10/11 toast (Chrome/Edge). Big image + up to 2 action buttons supported.</div>
-      </div>
-    );
-  }
-  if (platform === "android") {
-    return (
-      <div>
-        <div style={{ background: "#fff", color: "#1a1a1a", borderRadius: 24, padding: "14px 16px", width: 330, boxShadow: "0 6px 24px rgba(0,0,0,.25)" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12, color: "#5f6368" }}>
-            {iconEl(16, 4)}
-            <span>Chrome · {domain} · now</span>
-          </div>
-          <div style={{ fontWeight: 600, fontSize: 14, marginTop: 6 }}>{title}</div>
-          <div style={{ fontSize: 13, color: "#5f6368" }}>{body}</div>
-          {image && <img src={image} style={{ width: "100%", borderRadius: 12, marginTop: 10 }} />}
-        </div>
-        <div className="preview-note">Android notification shade (Chrome). Big image shown when expanded.</div>
-      </div>
-    );
-  }
-  if (platform === "mac") {
-    return (
-      <div>
-        <div style={{ background: "rgba(245,245,247,.98)", color: "#1a1a1a", borderRadius: 14, padding: "12px 14px", width: 330, boxShadow: "0 6px 24px rgba(0,0,0,.3)", display: "flex", gap: 12, alignItems: "center" }}>
-          {iconEl(38, 8)}
-          <div style={{ minWidth: 0 }}>
-            <div style={{ fontWeight: 600, fontSize: 13 }}>{title}</div>
-            <div style={{ fontSize: 12.5, color: "#555" }}>{body}</div>
-            <div style={{ fontSize: 11, color: "#999", marginTop: 2 }}>{domain}</div>
-          </div>
-        </div>
-        <div className="preview-note">macOS banner (top-right). Chrome/Safari — big image not displayed, keep title ≤ 40 chars.</div>
-      </div>
-    );
-  }
-  // ios
+interface PreviewProps {
+  title: string;
+  body: string;
+  icon: string | null;
+  image: string | null;
+  domain: string;
+  actions: ActionRow[];
+}
+
+function Icon({ icon, size, radius }: { icon: string | null; size: number; radius: number }) {
+  return icon ? (
+    <img src={icon} style={{ width: size, height: size, borderRadius: radius, objectFit: "cover", flexShrink: 0 }} />
+  ) : (
+    <div style={{ width: size, height: size, borderRadius: radius, background: "linear-gradient(135deg,#7C3AED,#a78bfa)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: size * 0.5, flexShrink: 0 }}>🔔</div>
+  );
+}
+
+/* ---------- realistic device mockups ---------- */
+
+function IphonePreview({ title, body, icon }: PreviewProps) {
   return (
-    <div>
-      <div style={{ background: "rgba(250,250,252,.95)", color: "#1a1a1a", borderRadius: 20, padding: "12px 14px", width: 330, boxShadow: "0 6px 24px rgba(0,0,0,.3)", display: "flex", gap: 12, alignItems: "center" }}>
-        {iconEl(40, 10)}
+    <div style={{ width: 270, height: 560, borderRadius: 44, border: "10px solid #17171a", background: "linear-gradient(165deg,#4a3b7a 0%,#232a52 55%,#141a38 100%)", position: "relative", overflow: "hidden", boxShadow: "0 20px 50px rgba(0,0,0,.5)" }}>
+      {/* dynamic island */}
+      <div style={{ position: "absolute", top: 10, left: "50%", transform: "translateX(-50%)", width: 86, height: 24, borderRadius: 14, background: "#000" }} />
+      {/* lock screen clock */}
+      <div style={{ textAlign: "center", marginTop: 64, color: "#fff" }}>
+        <div style={{ fontSize: 15, fontWeight: 600, opacity: 0.9 }}>Tuesday, 14 July</div>
+        <div style={{ fontSize: 64, fontWeight: 300, lineHeight: 1.05, letterSpacing: -1 }}>9:41</div>
+      </div>
+      {/* notification banner */}
+      <div style={{ margin: "26px 10px 0", background: "rgba(245,245,250,.88)", backdropFilter: "blur(6px)", borderRadius: 18, padding: "10px 12px", color: "#111", display: "flex", gap: 10, alignItems: "center" }}>
+        <Icon icon={icon} size={34} radius={8} />
         <div style={{ minWidth: 0, flex: 1 }}>
-          <div style={{ display: "flex", justifyContent: "space-between", gap: 8 }}>
-            <span style={{ fontWeight: 600, fontSize: 13 }}>{title}</span>
-            <span style={{ fontSize: 11, color: "#999" }}>now</span>
+          <div style={{ display: "flex", justifyContent: "space-between", gap: 6 }}>
+            <span style={{ fontWeight: 600, fontSize: 12.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{title}</span>
+            <span style={{ fontSize: 10, color: "#666", flexShrink: 0 }}>now</span>
           </div>
-          <div style={{ fontSize: 12.5, color: "#555" }}>{body}</div>
+          <div style={{ fontSize: 12, color: "#333", overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{body}</div>
         </div>
       </div>
-      <div className="preview-note">
-        iOS 16.4+ lock screen. Web push works only after the visitor adds the site to their Home Screen; images &amp; action buttons are not shown — the title/body must carry the message.
+      {/* bottom controls */}
+      <div style={{ position: "absolute", bottom: 22, left: 0, right: 0, display: "flex", justifyContent: "space-between", padding: "0 34px" }}>
+        <div style={{ width: 40, height: 40, borderRadius: "50%", background: "rgba(255,255,255,.15)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>🔦</div>
+        <div style={{ width: 40, height: 40, borderRadius: "50%", background: "rgba(255,255,255,.15)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 16 }}>📷</div>
+      </div>
+      <div style={{ position: "absolute", bottom: 6, left: "50%", transform: "translateX(-50%)", width: 110, height: 4, borderRadius: 2, background: "rgba(255,255,255,.75)" }} />
+    </div>
+  );
+}
+
+function AndroidPreview({ title, body, icon, image, domain, actions }: PreviewProps) {
+  return (
+    <div style={{ width: 270, height: 560, borderRadius: 30, border: "8px solid #1c1e22", background: "linear-gradient(160deg,#0f3d3e 0%,#12252e 60%,#0c1620 100%)", position: "relative", overflow: "hidden", boxShadow: "0 20px 50px rgba(0,0,0,.5)" }}>
+      {/* punch-hole camera */}
+      <div style={{ position: "absolute", top: 10, left: "50%", transform: "translateX(-50%)", width: 12, height: 12, borderRadius: "50%", background: "#000" }} />
+      {/* status bar */}
+      <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 16px 0", color: "#e6e6e6", fontSize: 11 }}>
+        <span>9:41</span>
+        <span>📶 🔋</span>
+      </div>
+      {/* clock small */}
+      <div style={{ color: "#e9f2ef", padding: "26px 20px 8px" }}>
+        <div style={{ fontSize: 42, fontWeight: 400, lineHeight: 1 }}>9:41</div>
+        <div style={{ fontSize: 12, opacity: 0.8, marginTop: 4 }}>Tue, 14 July</div>
+      </div>
+      {/* notification card */}
+      <div style={{ margin: "14px 10px 0", background: "#fdfdfd", borderRadius: 22, padding: "12px 14px", color: "#1b1b1f" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 11, color: "#5f6368" }}>
+          <div style={{ width: 14, height: 14, borderRadius: "50%", background: "conic-gradient(#ea4335 0 25%, #fbbc04 25% 50%, #34a853 50% 75%, #4285f4 75% 100%)" }} />
+          <span>Chrome · {domain} · now</span>
+        </div>
+        <div style={{ display: "flex", gap: 10, marginTop: 8 }}>
+          <div style={{ minWidth: 0, flex: 1 }}>
+            <div style={{ fontWeight: 600, fontSize: 13.5 }}>{title}</div>
+            <div style={{ fontSize: 12.5, color: "#5f6368", marginTop: 2 }}>{body}</div>
+          </div>
+          <Icon icon={icon} size={36} radius={8} />
+        </div>
+        {image && <img src={image} style={{ width: "100%", borderRadius: 12, marginTop: 10, maxHeight: 110, objectFit: "cover" }} />}
+        {actions.length > 0 && (
+          <div style={{ display: "flex", gap: 18, marginTop: 10, paddingTop: 8, borderTop: "1px solid #eee" }}>
+            {actions.map((a, i) => (
+              <span key={i} style={{ color: "#0b57d0", fontSize: 12.5, fontWeight: 600 }}>
+                {a.kind === "call" ? "📞 " : ""}{a.title || (a.kind === "call" ? "Call now" : "Open")}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+      <div style={{ position: "absolute", bottom: 8, left: "50%", transform: "translateX(-50%)", width: 96, height: 4, borderRadius: 2, background: "rgba(255,255,255,.5)" }} />
+    </div>
+  );
+}
+
+function WindowsPreview({ title, body, icon, image, domain, actions }: PreviewProps) {
+  return (
+    <div style={{ width: 360, height: 230, borderRadius: 10, background: "linear-gradient(140deg,#0b3d91 0%,#1763c6 45%,#57a8e8 100%)", position: "relative", overflow: "hidden", boxShadow: "0 14px 40px rgba(0,0,0,.45)", border: "1px solid #333" }}>
+      {/* toast */}
+      <div style={{ position: "absolute", right: 10, bottom: 44, width: 250, background: "#202020", borderRadius: 8, padding: "10px 12px", color: "#fff", boxShadow: "0 8px 26px rgba(0,0,0,.55)" }}>
+        <div style={{ display: "flex", gap: 10 }}>
+          <Icon icon={icon} size={34} radius={6} />
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontWeight: 600, fontSize: 12 }}>{title}</div>
+            <div style={{ fontSize: 11.5, color: "#c8c8c8", marginTop: 1 }}>{body}</div>
+            <div style={{ fontSize: 10, color: "#8a8a8a", marginTop: 4 }}>Google Chrome · {domain}</div>
+          </div>
+          <span style={{ marginLeft: "auto", color: "#8a8a8a", fontSize: 11 }}>✕</span>
+        </div>
+        {image && <img src={image} style={{ width: "100%", borderRadius: 4, marginTop: 8, maxHeight: 70, objectFit: "cover" }} />}
+        {actions.length > 0 && (
+          <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+            {actions.map((a, i) => (
+              <span key={i} style={{ flex: 1, textAlign: "center", background: "#3a3a3a", borderRadius: 4, padding: "5px 0", fontSize: 11, fontWeight: 600 }}>
+                {a.kind === "call" ? "📞 " : ""}{a.title || (a.kind === "call" ? "Call now" : "Open")}
+              </span>
+            ))}
+          </div>
+        )}
+      </div>
+      {/* taskbar */}
+      <div style={{ position: "absolute", bottom: 0, left: 0, right: 0, height: 34, background: "rgba(18,18,24,.85)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", gap: 12, fontSize: 14 }}>
+        <span>⊞</span><span>🔍</span><span>📁</span><span>🌐</span><span>✉️</span>
+        <span style={{ position: "absolute", right: 10, fontSize: 9.5, color: "#ccc", textAlign: "right", lineHeight: 1.3 }}>9:41 AM<br />14-07-2026</span>
       </div>
     </div>
   );
 }
+
+function MacPreview({ title, body, icon, domain }: PreviewProps) {
+  return (
+    <div style={{ width: 360, height: 230, borderRadius: 12, background: "linear-gradient(150deg,#c76b98 0%,#7b4ea3 40%,#2e2e6e 100%)", position: "relative", overflow: "hidden", boxShadow: "0 14px 40px rgba(0,0,0,.45)", border: "1px solid #333" }}>
+      {/* menu bar */}
+      <div style={{ height: 22, background: "rgba(20,20,28,.55)", backdropFilter: "blur(6px)", display: "flex", alignItems: "center", padding: "0 10px", color: "#eee", fontSize: 10, gap: 10 }}>
+        <span style={{ fontSize: 11 }}></span>
+        <b>Finder</b><span>File</span><span>Edit</span><span>View</span>
+        <span style={{ marginLeft: "auto" }}>Tue 14 Jul 9:41 AM</span>
+      </div>
+      {/* banner top-right */}
+      <div style={{ position: "absolute", right: 10, top: 32, width: 240, background: "rgba(246,246,248,.92)", backdropFilter: "blur(6px)", borderRadius: 12, padding: "9px 11px", color: "#111", display: "flex", gap: 10, alignItems: "center", boxShadow: "0 8px 26px rgba(0,0,0,.35)" }}>
+        <Icon icon={icon} size={32} radius={7} />
+        <div style={{ minWidth: 0 }}>
+          <div style={{ fontWeight: 600, fontSize: 11.5 }}>{title}</div>
+          <div style={{ fontSize: 11, color: "#444", overflow: "hidden", display: "-webkit-box", WebkitLineClamp: 2, WebkitBoxOrient: "vertical" }}>{body}</div>
+          <div style={{ fontSize: 9.5, color: "#888", marginTop: 2 }}>{domain}</div>
+        </div>
+      </div>
+      {/* dock */}
+      <div style={{ position: "absolute", bottom: 6, left: "50%", transform: "translateX(-50%)", background: "rgba(255,255,255,.22)", backdropFilter: "blur(6px)", borderRadius: 12, padding: "4px 10px", display: "flex", gap: 8, fontSize: 15 }}>
+        <span>🌐</span><span>✉️</span><span>🗓️</span><span>🎵</span><span>⚙️</span>
+      </div>
+    </div>
+  );
+}
+
+const PREVIEW_NOTES: Record<Platform, string> = {
+  windows: "Windows 10/11 toast, bottom-right above the taskbar. Big image + up to 2 action buttons supported.",
+  android: "Android notification shade (Chrome). Big image when expanded; action buttons as text links. Click-to-call opens the dialer.",
+  mac: "macOS banner, top-right under the menu bar. No big image or action buttons — keep the title short.",
+  ios: "iOS 16.4+ lock screen. Works only after the visitor adds the site to their Home Screen; no images or buttons — title/body must carry the message.",
+};
+
+/* ---------- page ---------- */
 
 export default function CampaignDetail() {
   const { id } = useParams<{ id: string }>();
@@ -122,8 +220,9 @@ export default function CampaignDetail() {
   const [report, setReport] = useState<Report | null>(null);
   const [segments, setSegments] = useState<{ id: string; name: string }[]>([]);
   const [audience, setAudience] = useState<number | null>(null);
-  const [platform, setPlatform] = useState<Platform>("windows");
+  const [platform, setPlatform] = useState<Platform>("android");
   const [form, setForm] = useState({ name: "", title: "", body: "", clickUrl: "", iconUrl: "", imageUrl: "", segmentId: "", pacing: "", scheduleAt: "" });
+  const [actions, setActions] = useState<ActionRow[]>([]);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -139,6 +238,13 @@ export default function CampaignDetail() {
         segmentId: c.segment?.id ?? "", pacing: c.pacingPerMinute ? String(c.pacingPerMinute) : "",
         scheduleAt: "",
       });
+      setActions(
+        (c.actions ?? []).map((a) => ({
+          kind: a.url?.startsWith("tel:") ? "call" : "url",
+          title: a.title,
+          value: a.url?.startsWith("tel:") ? a.url.slice(4) : a.url,
+        })),
+      );
       if (c.status !== "draft") {
         api<Report>(`/campaigns/${id}/report`).then(setReport).catch(() => {});
       }
@@ -148,14 +254,12 @@ export default function CampaignDetail() {
 
   useEffect(load, [load]);
 
-  // poll while sending
   useEffect(() => {
     if (campaign?.status !== "sending") return;
     const t = setInterval(load, 2000);
     return () => clearInterval(t);
   }, [campaign?.status, load]);
 
-  // live leads count for the assigned segment
   useEffect(() => {
     let stale = false;
     setAudience(null);
@@ -166,6 +270,17 @@ export default function CampaignDetail() {
     return () => { stale = true; };
   }, [form.segmentId]);
 
+  function actionsPayload(): CampaignAction[] {
+    return actions
+      .filter((a) => a.value.trim())
+      .slice(0, 2)
+      .map((a, i) => ({
+        action: `a${i + 1}`,
+        title: a.title || (a.kind === "call" ? "Call now" : "Open"),
+        url: a.kind === "call" ? `tel:${a.value.replace(/[^\d+]/g, "")}` : a.value,
+      }));
+  }
+
   async function save(): Promise<boolean> {
     setBusy(true); setMsg(""); setError("");
     try {
@@ -174,6 +289,7 @@ export default function CampaignDetail() {
         body: JSON.stringify({
           name: form.name, title: form.title, body: form.body, clickUrl: form.clickUrl,
           iconUrl: form.iconUrl || undefined, imageUrl: form.imageUrl || undefined,
+          actions: actionsPayload(),
           segmentId: form.segmentId || null,
           pacingPerMinute: form.pacing ? Number(form.pacing) : null,
         }),
@@ -219,6 +335,7 @@ export default function CampaignDetail() {
         name: form.name + " (copy)",
         title: form.title, body: form.body, clickUrl: form.clickUrl,
         iconUrl: form.iconUrl || undefined, imageUrl: form.imageUrl || undefined,
+        actions: actionsPayload(),
         segmentId: form.segmentId || undefined,
         pacingPerMinute: form.pacing ? Number(form.pacing) : undefined,
       }),
@@ -229,6 +346,14 @@ export default function CampaignDetail() {
   if (!campaign) return <div className="page-sub">{error || "Loading…"}</div>;
 
   const domain = (() => { try { return new URL(form.clickUrl).host; } catch { return "yoursite.com"; } })();
+  const previewProps: PreviewProps = {
+    title: form.title || "Notification title",
+    body: form.body || "Notification body",
+    icon: form.iconUrl || null,
+    image: form.imageUrl || null,
+    domain,
+    actions: actions.filter((a) => a.value.trim()).slice(0, 2),
+  };
 
   return (
     <>
@@ -269,19 +394,37 @@ export default function CampaignDetail() {
         <div className="page-sub">This campaign has been {campaign.status} — content is locked. Duplicate it to edit and re-blast.</div>
       )}
 
-      <div style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+      <div style={{ display: "flex", gap: 24, flexWrap: "wrap", alignItems: "flex-start" }}>
         {/* ---- content ---- */}
         <div className="panel" style={{ flex: 1, minWidth: 340 }}>
           <h3>Content</h3>
           <fieldset disabled={!editable} style={{ border: "none" }}>
             <label>Internal name</label>
             <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} />
-            <label>Title</label>
+
+            <label>Title <span style={{ color: form.title.length > 50 ? "var(--amber)" : "var(--text-dim)", fontWeight: 400 }}>({form.title.length}/50 recommended)</span></label>
             <input value={form.title} onChange={(e) => setForm({ ...form, title: e.target.value })} />
-            <label>Body</label>
+            {editable && (
+              <div style={{ display: "flex", gap: 4, marginTop: 6, flexWrap: "wrap" }}>
+                {EMOJI.map((em) => (
+                  <button
+                    key={em}
+                    type="button"
+                    onClick={() => setForm({ ...form, title: form.title + em })}
+                    style={{ background: "var(--bg-elevated)", border: "1px solid var(--border)", borderRadius: 6, padding: "3px 7px", cursor: "pointer", fontSize: 14 }}
+                  >
+                    {em}
+                  </button>
+                ))}
+              </div>
+            )}
+
+            <label>Body <span style={{ color: form.body.length > 120 ? "var(--amber)" : "var(--text-dim)", fontWeight: 400 }}>({form.body.length}/120 recommended)</span></label>
             <textarea rows={3} value={form.body} onChange={(e) => setForm({ ...form, body: e.target.value })} />
+
             <label>Click URL (where the tap lands)</label>
             <input value={form.clickUrl} onChange={(e) => setForm({ ...form, clickUrl: e.target.value })} />
+
             <div style={{ display: "flex", gap: 8 }}>
               <div style={{ flex: 1 }}>
                 <label>Icon URL</label>
@@ -292,6 +435,42 @@ export default function CampaignDetail() {
                 <input value={form.imageUrl} placeholder="https://… (2:1, Win/Android only)" onChange={(e) => setForm({ ...form, imageUrl: e.target.value })} />
               </div>
             </div>
+
+            <label>Action buttons (up to 2, Windows/Android) — supports click-to-call</label>
+            {actions.map((a, i) => (
+              <div key={i} style={{ display: "flex", gap: 8, marginBottom: 8 }}>
+                <select
+                  value={a.kind}
+                  style={{ width: 130 }}
+                  onChange={(e) => setActions(actions.map((x, j) => (j === i ? { ...x, kind: e.target.value as ActionRow["kind"] } : x)))}
+                >
+                  <option value="url">Open URL</option>
+                  <option value="call">📞 Call phone</option>
+                </select>
+                <input
+                  style={{ width: 130 }}
+                  placeholder="Button label"
+                  value={a.title}
+                  onChange={(e) => setActions(actions.map((x, j) => (j === i ? { ...x, title: e.target.value } : x)))}
+                />
+                <input
+                  placeholder={a.kind === "call" ? "+91 98765 43210" : "https://…"}
+                  value={a.value}
+                  onChange={(e) => setActions(actions.map((x, j) => (j === i ? { ...x, value: e.target.value } : x)))}
+                />
+                <button type="button" className="btn secondary small" onClick={() => setActions(actions.filter((_, j) => j !== i))}>✕</button>
+              </div>
+            ))}
+            {actions.length < 2 && editable && (
+              <div style={{ display: "flex", gap: 8 }}>
+                <button type="button" className="btn secondary small" onClick={() => setActions([...actions, { kind: "url", title: "", value: "" }])}>
+                  + Add button
+                </button>
+                <button type="button" className="btn secondary small" onClick={() => setActions([...actions, { kind: "call", title: "Call now", value: "" }])}>
+                  + 📞 Click-to-call
+                </button>
+              </div>
+            )}
 
             <h3 style={{ marginTop: 22 }}>Targeting &amp; pacing</h3>
             <label>Leads (segment)</label>
@@ -335,29 +514,22 @@ export default function CampaignDetail() {
         </div>
 
         {/* ---- platform previews ---- */}
-        <div className="panel" style={{ width: 400 }}>
+        <div className="panel" style={{ width: 440 }}>
           <h3>Popup preview per platform</h3>
           <div style={{ display: "flex", gap: 6, marginBottom: 16 }}>
             {(["windows", "android", "mac", "ios"] as Platform[]).map((p) => (
-              <button
-                key={p}
-                className={"btn small " + (platform === p ? "" : "secondary")}
-                onClick={() => setPlatform(p)}
-              >
+              <button key={p} className={"btn small " + (platform === p ? "" : "secondary")} onClick={() => setPlatform(p)}>
                 {p === "windows" ? "🪟 Windows" : p === "android" ? "🤖 Android" : p === "mac" ? "🍎 macOS" : "📱 iOS"}
               </button>
             ))}
           </div>
-          <div style={{ background: "var(--bg-elevated)", borderRadius: 12, padding: 20, display: "flex", justifyContent: "center" }}>
-            <PlatformPreview
-              platform={platform}
-              title={form.title || "Notification title"}
-              body={form.body || "Notification body"}
-              icon={form.iconUrl || null}
-              image={form.imageUrl || null}
-              domain={domain}
-            />
+          <div style={{ display: "flex", justifyContent: "center", padding: "10px 0" }}>
+            {platform === "ios" && <IphonePreview {...previewProps} />}
+            {platform === "android" && <AndroidPreview {...previewProps} />}
+            {platform === "windows" && <WindowsPreview {...previewProps} />}
+            {platform === "mac" && <MacPreview {...previewProps} />}
           </div>
+          <div className="preview-note" style={{ maxWidth: "100%", textAlign: "center" }}>{PREVIEW_NOTES[platform]}</div>
         </div>
       </div>
 
