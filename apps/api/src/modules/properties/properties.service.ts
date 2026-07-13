@@ -126,6 +126,28 @@ export class PropertiesService {
     return this.serialize(property);
   }
 
+  /** Delete a property. Refuses if it still has subscribers or campaigns. */
+  async remove(user: AuthUser, id: string) {
+    const db = this.db(user);
+    const property = await db.property.findUnique({ where: { id } });
+    if (!property) throw new NotFoundException("Property not found");
+    const [subs, camps] = await Promise.all([
+      db.subscriber.count({ where: { propertyId: id } }),
+      db.campaign.count({ where: { propertyId: id } }),
+    ]);
+    if (subs > 0 || camps > 0) {
+      throw new BadRequestException(
+        `Property has ${subs} subscriber(s) and ${camps} campaign(s) — remove those first (GDPR erase subscribers, delete campaigns).`,
+      );
+    }
+    await db.pagePath.deleteMany({ where: { propertyId: id } });
+    await db.segment.deleteMany({ where: { propertyId: id } });
+    await db.automation.deleteMany({ where: { propertyId: id } });
+    await db.property.delete({ where: { id } });
+    await this.audit(user, "property.delete", id, { name: property.name }, null);
+    return { ok: true };
+  }
+
   async rotateApiKey(user: AuthUser, id: string) {
     const property = await this.db(user).property.findUnique({ where: { id } });
     if (!property) throw new NotFoundException("Property not found");

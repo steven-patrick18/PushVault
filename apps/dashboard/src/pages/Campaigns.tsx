@@ -41,6 +41,16 @@ export default function Campaigns() {
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
+  async function remove(id: string, name: string) {
+    if (!confirm(`Delete campaign "${name}" and its send history? This can't be undone.`)) return;
+    try {
+      await api(`/campaigns/${id}`, { method: "DELETE" });
+      load();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+
   const load = () => {
     api<Campaign[]>("/campaigns").then(setCampaigns).catch((e) => setError(e.message));
     api<{ id: string; name: string; domains: string[] }[]>("/properties").then((p) => {
@@ -158,9 +168,16 @@ export default function Campaigns() {
                     <td>{c.totalClicked}</td>
                     <td>{c.totalExpiredPruned}</td>
                     <td onClick={(e) => e.stopPropagation()}>
-                      <button className="btn secondary small" onClick={() => navigate(`/campaigns/${c.id}`)}>
-                        {c.status === "draft" && canEdit ? "✎ Design" : "Manage"}
-                      </button>
+                      <div className="row-actions">
+                        <button className="btn secondary small" onClick={() => navigate(`/campaigns/${c.id}`)}>
+                          {c.status === "draft" && canEdit ? "✎ Design" : "Manage"}
+                        </button>
+                        {canEdit && c.status !== "sending" && (
+                          <button className="btn secondary small" title="Delete campaign" onClick={() => remove(c.id, c.name)}>
+                            🗑
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );

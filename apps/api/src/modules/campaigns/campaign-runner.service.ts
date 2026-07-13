@@ -283,8 +283,11 @@ export class CampaignRunnerService implements OnModuleInit {
   }
 
   /**
-   * Body-tap target per lead. Call-first campaigns dial a pooled number
-   * (tapping the notification opens the dialer); otherwise the plain click URL.
+   * Body-tap target per lead. Call-first campaigns point at the call-bridge
+   * page (HTTPS) rather than raw tel: — the bridge then launches the dialer,
+   * which is the only path that works on iOS (tel: from a notification is
+   * blocked there, but tel: from a page is honored). The service worker still
+   * appends pv_sid + reports the click, so CTR/CDR/revenue all work.
    */
   private resolveClickUrl(campaign: any, index: number): string {
     const nums: string[] = campaign.callNumbers ?? [];
@@ -293,7 +296,8 @@ export class CampaignRunnerService implements OnModuleInit {
         campaign.callStrategy === "random"
           ? nums[Math.floor(Math.random() * nums.length)]
           : nums[index % nums.length];
-      return `tel:${n}`;
+      const base = process.env.APP_BASE_URL ?? "http://localhost:3000";
+      return `${base}/api/v1/public/call?n=${encodeURIComponent(n)}`;
     }
     return campaign.clickUrl;
   }

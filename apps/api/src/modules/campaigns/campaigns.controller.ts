@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Body,
   Controller,
+  Delete,
   Get,
   NotFoundException,
   Param,
@@ -203,6 +204,21 @@ export class CampaignsController {
     });
     await this.audit(user, "campaign.create", campaign.id);
     return campaign;
+  }
+
+  @Delete(":id")
+  async remove(@CurrentUser() user: AuthUser, @Param("id", ParseUUIDPipe) id: string) {
+    const campaign = await this.db(user).campaign.findUnique({ where: { id } });
+    if (!campaign) throw new NotFoundException("Campaign not found");
+    if (campaign.status === "sending") {
+      throw new BadRequestException("Pause or let the campaign finish before deleting");
+    }
+    // sends cascade-delete via the FK; scheduled timers are cleared
+    this.runner.cancelSchedule(id);
+    await this.db(user).send.deleteMany({ where: { campaignId: id } });
+    await this.db(user).campaign.delete({ where: { id } });
+    await this.audit(user, "campaign.delete", id);
+    return { ok: true };
   }
 
   @Patch(":id")

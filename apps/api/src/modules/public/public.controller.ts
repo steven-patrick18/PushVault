@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -7,8 +8,10 @@ import {
   Ip,
   Post,
   Query,
+  Res,
   UseGuards,
 } from "@nestjs/common";
+import type { Response } from "express";
 import { IsNotEmpty, IsNumber, IsObject, IsOptional, IsString, IsUUID, Min } from "class-validator";
 import { PublicService } from "./public.service";
 import { RateLimit, RateLimitGuard } from "../../common/rate-limit.guard";
@@ -127,6 +130,46 @@ export class PublicController {
   @RateLimit({ limit: 120, windowSec: 60 })
   click(@Body() dto: ClickDto) {
     return this.service.trackClick(dto.send_id);
+  }
+
+  /**
+   * Call bridge: an HTTPS page that launches the native dialer. Notifications
+   * point here (?n=<number>&sid=<send_id>) instead of tel: directly, because
+   * tel: from a service-worker notification is blocked on iOS — but tel: from
+   * a *page* is honored everywhere (iPhone, Android, desktop). Auto-dials, with
+   * a tap-again fallback, and records the click for CTR/CDR.
+   */
+  @Get("call")
+  call(
+    @Query("n") n: string,
+    @Query("sid") sid: string | undefined,
+    @Query("pv_sid") pvSid: string | undefined,
+    @Res() res: Response,
+  ) {
+    const number = String(n ?? "").replace(/[^\d+]/g, "");
+    // click is normally recorded by the SW; track here too (idempotent) so a
+    // direct/iOS open still counts
+    const clickId = sid || pvSid;
+    if (clickId) this.service.trackClick(clickId).catch(() => undefined);
+    const tel = "tel:" + number;
+    const safe = number.replace(/[^\d+]/g, "");
+    res.setHeader("Content-Type", "text/html; charset=utf-8");
+    res.setHeader("Cache-Control", "no-store");
+    res.send(`<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Connecting your call…</title>
+<style>body{font-family:system-ui,sans-serif;background:#0e0e13;color:#e8e8f0;display:flex;min-height:100vh;margin:0;align-items:center;justify-content:center;text-align:center}
+.c{max-width:340px;padding:28px}.n{font-size:22px;font-weight:700;margin:14px 0 6px}
+a.btn{display:inline-block;margin-top:18px;background:#7C3AED;color:#fff;text-decoration:none;padding:14px 26px;border-radius:12px;font-weight:700;font-size:16px}
+.d{color:#9a9aad;font-size:13px;margin-top:16px}</style></head>
+<body><div class="c"><div style="font-size:44px">📞</div>
+<div class="n">Connecting your call…</div>
+<div class="d">If the dialer doesn't open automatically, tap the button.</div>
+<a class="btn" href="${tel}">Call ${safe}</a></div>
+<script>
+try{location.href=${JSON.stringify(tel)};}catch(e){}
+setTimeout(function(){try{location.href=${JSON.stringify(tel)};}catch(e){}},600);
+</script></body></html>`);
   }
 
   @Post("event/pageview")

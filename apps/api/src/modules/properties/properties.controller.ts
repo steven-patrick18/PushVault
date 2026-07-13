@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseUUIDPipe,
@@ -92,6 +93,11 @@ export class PropertiesController {
     @Body() dto: UpdatePropertyDto,
   ) {
     return this.properties.update(user, id, dto);
+  }
+
+  @Delete(":id")
+  remove(@CurrentUser() user: AuthUser, @Param("id", ParseUUIDPipe) id: string) {
+    return this.properties.remove(user, id);
   }
 
   @Post(":id/rotate-api-key")

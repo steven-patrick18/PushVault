@@ -819,10 +819,10 @@ export default function CampaignDetail() {
                         </div>
                       </>
                     )}
-                    <div style={{ fontSize: 11, color: "var(--amber)", marginTop: 8 }}>
-                      ⚠ Tap-to-dial works on Android &amp; desktop. On iPhone/iPad web push, Apple blocks
-                      <code>tel:</code> from notifications — iOS leads open the site instead. For guaranteed
-                      dialing everywhere, also add a click-to-call action button below.
+                    <div style={{ fontSize: 11, color: "var(--green)", marginTop: 8 }}>
+                      ✅ Works on iPhone, Android &amp; desktop. Tapping opens a secure call page that
+                      launches the dialer — this routes around Apple's block on <code>tel:</code> in
+                      notifications, so iOS leads dial too. The tap is still tracked (CTR/CDR).
                     </div>
                   </div>
                 )}

@@ -97,9 +97,26 @@ export default function Properties() {
                     </span>
                   </td>
                   <td>
-                    <button className="btn small" onClick={() => navigate(`/properties/${p.id}`)}>
-                      Manage
-                    </button>
+                    <div className="row-actions">
+                      <button className="btn small" onClick={() => navigate(`/properties/${p.id}`)}>
+                        Manage
+                      </button>
+                      <button
+                        className="btn secondary small"
+                        title="Delete property (only if it has no subscribers/campaigns)"
+                        onClick={async () => {
+                          if (!confirm(`Delete property "${p.name}"?`)) return;
+                          try {
+                            await api(`/properties/${p.id}`, { method: "DELETE" });
+                            load();
+                          } catch (e: any) {
+                            setError(e.message);
+                          }
+                        }}
+                      >
+                        🗑
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
