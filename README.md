@@ -9,6 +9,11 @@ Multi-tenant web push notification platform. Client sites install a JS snippet +
 - **Dashboard** — React + Vite ([apps/dashboard](apps/dashboard))
 - **Queue** — Redis + BullMQ (arrives with M3)
 
+## Production deployment
+
+One Ubuntu VPS + Docker: see **[deploy/DEPLOY.md](deploy/DEPLOY.md)** — tuned Postgres,
+Redis, Caddy auto-HTTPS, backups, GeoLite2, and the update workflow. ~30 minutes.
+
 ## Local development (no Docker required)
 
 ```bash

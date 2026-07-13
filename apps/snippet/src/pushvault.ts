@@ -139,7 +139,10 @@ interface RemoteConfig {
       return false;
     }
     try {
-      const reg = await navigator.serviceWorker.register("/pv-sw.js");
+      // updateViaCache none + explicit update(): subscribers pick up new
+      // worker versions on their next visit instead of waiting out HTTP cache
+      const reg = await navigator.serviceWorker.register("/pv-sw.js", { updateViaCache: "none" });
+      reg.update().catch(() => undefined);
       await navigator.serviceWorker.ready;
       const sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,

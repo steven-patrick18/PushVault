@@ -1,0 +1,101 @@
+# PushVault production stack — single server.
+# Usage (from the repo root):
+#   docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env up -d --build
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: pushvault
+    # tuned for ~6 GB VPS; halve shared_buffers/effective_cache_size on 4 GB
+    command: >
+      postgres
+      -c shared_buffers=1536MB
+      -c effective_cache_size=3GB
+      -c work_mem=16MB
+      -c maintenance_work_mem=256MB
+      -c max_wal_size=2GB
+      -c random_page_cost=1.1
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d pushvault"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    command: redis-server --maxmemory 384mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+      args:
+        APP_BASE_URL: https://${PUSH_DOMAIN}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      TRUST_PROXY: 1
+      DATABASE_URL: postgres://postgres:${POSTGRES_PASSWORD}@postgres:5432/pushvault
+      APP_DATABASE_URL: postgres://pv_app:${PV_APP_PASSWORD}@postgres:5432/pushvault
+      PV_APP_PASSWORD: ${PV_APP_PASSWORD}
+      JWT_SECRET: ${JWT_SECRET}
+      APP_BASE_URL: https://${PUSH_DOMAIN}
+      CDN_BASE_URL: https://${PUSH_DOMAIN}/cdn
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY}
+      VAPID_SUBJECT: ${VAPID_SUBJECT}
+      REDIS_URL: redis://redis:6379
+      GEOIP_DB_PATH: ${GEOIP_DB_PATH:-}
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+    volumes:
+      # optional GeoLite2 database (see DEPLOY.md §7)
+      - ./geoip:/geoip:ro
+    healthcheck:
+      test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3000/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 60s
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - api
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      PUSH_DOMAIN: ${PUSH_DOMAIN}
+      ACME_EMAIL: ${ACME_EMAIL}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+
+volumes:
+  pgdata:
+  redisdata:
+  caddydata:
+  caddyconfig:

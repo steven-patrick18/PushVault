@@ -1,0 +1,11 @@
+node_modules
+**/node_modules
+.pgdata
+data
+*.log
+apps/dashboard/dist
+apps/api/dist
+apps/snippet/dist
+deploy/.env
+deploy/geoip
+.claude
