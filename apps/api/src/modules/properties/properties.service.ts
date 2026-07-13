@@ -96,6 +96,74 @@ export class PropertiesService {
     return { apiKey }; // shown once
   }
 
+  /**
+   * Installation check: for every domain, confirm the client uploaded
+   * pv-sw.js to the site root (the "key file" handed to them at creation).
+   */
+  async verify(user: AuthUser, id: string) {
+    const property = await this.db(user).property.findUnique({ where: { id } });
+    if (!property) throw new NotFoundException("Property not found");
+
+    const results = await Promise.all(
+      property.domains.map(async (domain) => {
+        const schemes = domain.startsWith("localhost") ? ["http"] : ["https"];
+        for (const scheme of schemes) {
+          const url = `${scheme}://${domain}/pv-sw.js`;
+          try {
+            const controller = new AbortController();
+            const timer = setTimeout(() => controller.abort(), 5000);
+            const res = await fetch(url, { signal: controller.signal });
+            clearTimeout(timer);
+            const body = res.ok ? await res.text() : "";
+            const looksRight = body.includes("showNotification");
+            if (res.ok) {
+              return { domain, url, ok: looksRight, status: res.status, sw: looksRight };
+            }
+            return { domain, url, ok: false, status: res.status, sw: false };
+          } catch {
+            /* try next scheme / fall through */
+          }
+        }
+        return { domain, url: null, ok: false, status: null, sw: false };
+      }),
+    );
+
+    const allOk = results.every((r) => r.ok);
+    const verification = { checkedAt: new Date().toISOString(), results };
+    await this.db(user).property.update({
+      where: { id },
+      data: {
+        verification: verification as any,
+        verifiedAt: allOk ? new Date() : null,
+      },
+    });
+    await this.audit(user, "property.verify", id, null, { allOk });
+    return { verified: allOk, ...verification };
+  }
+
+  /** Pages discovered by the snippet beacon, with allow/block state. */
+  async pages(user: AuthUser, id: string) {
+    const property = await this.db(user).property.findUnique({ where: { id } });
+    if (!property) throw new NotFoundException("Property not found");
+    const pages = await this.db(user).pagePath.findMany({
+      where: { propertyId: id },
+      orderBy: { views: "desc" },
+    });
+    const cfg: any = property.promptConfig ?? {};
+    const include: string[] = cfg.pages?.include?.length ? cfg.pages.include : ["*"];
+    const exclude: string[] = cfg.pages?.exclude ?? [];
+    const toRegex = (glob: string) =>
+      new RegExp(
+        "^" + glob.split("*").map((s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join(".*") + "$",
+      );
+    return pages.map((p) => ({
+      ...p,
+      allowed:
+        !exclude.some((g) => toRegex(g).test(p.path)) &&
+        include.some((g) => g === "*" || toRegex(g).test(p.path)),
+    }));
+  }
+
   private installSnippet(propertyKey: string) {
     const cdn = process.env.CDN_BASE_URL ?? "http://localhost:3000/cdn";
     return {

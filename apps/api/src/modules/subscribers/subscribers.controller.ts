@@ -78,6 +78,46 @@ export class SubscribersController {
     return { rows, total, page: Number(page), pageSize: take };
   }
 
+  /** Growth stats for the overview: new subscribers per day + by campaign. */
+  @Get("stats")
+  async stats(@CurrentUser() user: AuthUser, @Query("property_id") propertyId?: string) {
+    const db = this.prisma.forTenant(user.tenantId);
+    const since = new Date(Date.now() - 30 * 86400_000);
+    const where: any = { subscribedAt: { gte: since } };
+    if (propertyId) where.propertyId = propertyId;
+
+    const [recent, byCampaign] = await Promise.all([
+      db.subscriber.findMany({ where, select: { subscribedAt: true } }),
+      db.subscriber.groupBy({
+        by: ["utmCampaign"],
+        where: propertyId ? { propertyId } : undefined,
+        _count: { _all: true },
+        orderBy: { _count: { utmCampaign: "desc" } },
+        take: 8,
+      }),
+    ]);
+
+    const days: { date: string; count: number }[] = [];
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date(Date.now() - i * 86400_000);
+      days.push({ date: d.toISOString().slice(0, 10), count: 0 });
+    }
+    const index = new Map(days.map((d, i) => [d.date, i]));
+    for (const s of recent) {
+      const key = s.subscribedAt.toISOString().slice(0, 10);
+      const i = index.get(key);
+      if (i !== undefined) days[i].count++;
+    }
+
+    return {
+      byDay: days,
+      byCampaign: byCampaign.map((c) => ({
+        campaign: c.utmCampaign ?? "(direct)",
+        count: c._count._all,
+      })),
+    };
+  }
+
   /** GDPR/DPDP erasure: hard-delete subscriber (sends cascade). */
   @Delete(":id")
   async erase(@CurrentUser() user: AuthUser, @Param("id", ParseUUIDPipe) id: string) {

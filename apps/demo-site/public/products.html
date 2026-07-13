@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Products — Northwind Gadgets</title>
+  <style>
+    body { font-family: system-ui, sans-serif; color: #222; background: #fafafa; margin: 0; }
+    header { background: #10213f; color: white; padding: 16px 32px; display: flex; justify-content: space-between; }
+    header a { color: #cdd6ea; margin-left: 18px; text-decoration: none; }
+    main { max-width: 900px; margin: 40px auto; padding: 0 20px; }
+  </style>
+</head>
+<body>
+  <header>
+    <b>⚡ Northwind Gadgets</b>
+    <nav><a href="/">Home</a><a href="/products.html">Products</a><a href="/checkout.html">Checkout</a></nav>
+  </header>
+  <main>
+    <h1>All products</h1>
+    <p>Browse the full catalog. The PushVault snippet is active on this page too — it reports the page path so the operator can allow or block the prompt here.</p>
+  </main>
+  <script src="http://localhost:3000/cdn/pushvault.js?v=3" data-property-key="%PROPERTY_KEY%" defer></script>
+</body>
+</html>

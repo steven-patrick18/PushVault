@@ -127,6 +127,23 @@ export class PublicService {
     return { ok: true };
   }
 
+  /** Page discovery: the snippet beacons each page it loads on. */
+  async trackPageview(propertyKey: string, path: string, origin: string | undefined) {
+    const property = await this.resolveProperty(propertyKey, origin);
+    const cleanPath = path.slice(0, 500).split("?")[0] || "/";
+    const db = this.prisma.forTenant(property.tenantId);
+    await db.pagePath.upsert({
+      where: { propertyId_path: { propertyId: property.id, path: cleanPath } },
+      create: {
+        tenantId: property.tenantId,
+        propertyId: property.id,
+        path: cleanPath,
+      },
+      update: { views: { increment: 1 }, lastSeenAt: new Date() },
+    });
+    return { ok: true };
+  }
+
   /** Idempotent click tracking, called by the service worker. */
   async trackClick(sendId: string) {
     const send = await this.prisma.system.send.findUnique({ where: { id: sendId } });

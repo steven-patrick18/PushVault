@@ -97,4 +97,14 @@ export class PropertiesController {
   rotate(@CurrentUser() user: AuthUser, @Param("id", ParseUUIDPipe) id: string) {
     return this.properties.rotateApiKey(user, id);
   }
+
+  @Post(":id/verify")
+  verify(@CurrentUser() user: AuthUser, @Param("id", ParseUUIDPipe) id: string) {
+    return this.properties.verify(user, id);
+  }
+
+  @Get(":id/pages")
+  pages(@CurrentUser() user: AuthUser, @Param("id", ParseUUIDPipe) id: string) {
+    return this.properties.pages(user, id);
+  }
 }

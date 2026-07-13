@@ -4,6 +4,8 @@ import Layout from "./components/Layout";
 import Login from "./pages/Login";
 import Overview from "./pages/Overview";
 import Properties from "./pages/Properties";
+import PropertyDetail from "./pages/PropertyDetail";
+import Settings from "./pages/Settings";
 import Subscribers from "./pages/Subscribers";
 import Segments from "./pages/Segments";
 import Campaigns from "./pages/Campaigns";
@@ -28,14 +30,12 @@ export default function App() {
       >
         <Route index element={<Overview />} />
         <Route path="properties" element={<Properties />} />
+        <Route path="properties/:id" element={<PropertyDetail />} />
         <Route path="subscribers" element={<Subscribers />} />
         <Route path="segments" element={<Segments />} />
         <Route path="campaigns" element={<Campaigns />} />
         <Route path="updates" element={<Updates />} />
-        <Route
-          path="settings"
-          element={<Placeholder title="Settings" milestone="M4 — Dashboard v1" />}
-        />
+        <Route path="settings" element={<Settings />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />
     </Routes>

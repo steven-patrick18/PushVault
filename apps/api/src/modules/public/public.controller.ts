@@ -55,6 +55,16 @@ class ClickDto {
   send_id: string;
 }
 
+class PageviewDto {
+  @IsString()
+  @IsNotEmpty()
+  property_key: string;
+
+  @IsString()
+  @IsNotEmpty()
+  path: string;
+}
+
 @Controller("public")
 export class PublicController {
   constructor(private readonly service: PublicService) {}
@@ -88,5 +98,11 @@ export class PublicController {
   @HttpCode(200)
   click(@Body() dto: ClickDto) {
     return this.service.trackClick(dto.send_id);
+  }
+
+  @Post("event/pageview")
+  @HttpCode(200)
+  pageview(@Body() dto: PageviewDto, @Headers("origin") origin?: string) {
+    return this.service.trackPageview(dto.property_key, dto.path, origin);
   }
 }

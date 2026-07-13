@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { api } from "../api";
 
 interface Property {
@@ -22,7 +23,7 @@ export default function Properties() {
   const [domains, setDomains] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
-  const [detail, setDetail] = useState<Property | null>(null);
+  const navigate = useNavigate();
 
   const load = () => api<Property[]>("/properties").then(setProperties).catch((e) => setError(e.message));
   useEffect(() => {
@@ -53,10 +54,6 @@ export default function Properties() {
     }
   }
 
-  async function openDetail(id: string) {
-    const res = await api<Property>(`/properties/${id}`);
-    setDetail(res);
-  }
 
   return (
     <>
@@ -100,8 +97,8 @@ export default function Properties() {
                     </span>
                   </td>
                   <td>
-                    <button className="btn secondary small" onClick={() => openDetail(p.id)}>
-                      Install code
+                    <button className="btn small" onClick={() => navigate(`/properties/${p.id}`)}>
+                      Manage
                     </button>
                   </td>
                 </tr>
@@ -154,26 +151,6 @@ export default function Properties() {
         </div>
       )}
 
-      {detail && (
-        <div className="modal-backdrop" onClick={() => setDetail(null)}>
-          <div className="modal" onClick={(e) => e.stopPropagation()}>
-            <h2>{detail.name}</h2>
-            <label>Property key</label>
-            <div className="code-block">{detail.propertyKey}</div>
-            <label>Install snippet</label>
-            <div className="code-block">{detail.install?.script}</div>
-            <label>Service worker</label>
-            <div className="code-block">{detail.install?.serviceWorker}</div>
-            <label>Frequency caps</label>
-            <div className="page-sub">
-              {detail.frequencyCapPerDay}/day · {detail.frequencyCapPerWeek}/week
-            </div>
-            <button className="btn" onClick={() => setDetail(null)}>
-              Close
-            </button>
-          </div>
-        </div>
-      )}
     </>
   );
 }

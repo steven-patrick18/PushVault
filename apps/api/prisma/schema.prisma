@@ -109,6 +109,8 @@ model Property {
   monthlySendQuota    BigInt?   @map("monthly_send_quota")
   status              String    @default("active")
   apiKeyHash          String?   @map("api_key_hash")
+  verifiedAt          DateTime? @map("verified_at") @db.Timestamptz()
+  verification        Json?
   createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt           DateTime? @updatedAt @map("updated_at") @db.Timestamptz()
 
@@ -116,9 +118,26 @@ model Property {
   subscribers Subscriber[]
   segments    Segment[]
   campaigns   Campaign[]
+  pages       PagePath[]
 
   @@index([tenantId])
   @@map("properties")
+}
+
+// pages discovered by the snippet's pageview beacon
+model PagePath {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String   @map("tenant_id") @db.Uuid
+  propertyId  String   @map("property_id") @db.Uuid
+  path        String
+  views       Int      @default(1)
+  firstSeenAt DateTime @default(now()) @map("first_seen_at") @db.Timestamptz()
+  lastSeenAt  DateTime @default(now()) @map("last_seen_at") @db.Timestamptz()
+
+  property Property @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+
+  @@unique([propertyId, path])
+  @@map("pages")
 }
 
 model Subscriber {

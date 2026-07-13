@@ -12,7 +12,12 @@ interface PromptConfig {
   trigger?: { type: "delay" | "scroll" | "exit_intent"; seconds?: number; percent?: number };
   pages?: { include?: string[]; exclude?: string[] };
   text?: { headline?: string; yes?: string; no?: string };
-  style?: { position?: "top" | "bottom"; accent?: string; logo?: string | null };
+  style?: {
+    position?: "top" | "bottom";
+    accent?: string;
+    logo?: string | null;
+    size?: "compact" | "normal" | "large";
+  };
   reask?: { enabled?: boolean; cooldown_days?: number };
 }
 
@@ -33,6 +38,9 @@ interface RemoteConfig {
   const LS_CHOICE = "pv_choice_" + propertyKey;
   const LS_CONFIG = "pv_cfg_" + propertyKey;
   const CONFIG_TTL = 3600_000; // 1h
+
+  // page discovery works everywhere, even where push is unsupported
+  beaconPageview();
 
   // 6. unsupported browser or already-denied permission: never render
   if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) return;
@@ -152,6 +160,12 @@ interface RemoteConfig {
     const style = pc.style ?? {};
     const accent = style.accent || "#7C3AED";
     const position = style.position === "bottom" ? "bottom" : "top";
+    const sizes = {
+      compact: { font: "12.5px", pad: "8px 12px", btn: "6px 10px", logo: 22 },
+      normal: { font: "14px", pad: "12px 16px", btn: "8px 14px", logo: 28 },
+      large: { font: "16px", pad: "16px 22px", btn: "10px 18px", logo: 36 },
+    } as const;
+    const sz = sizes[style.size ?? "normal"] ?? sizes.normal;
 
     const host = document.createElement("div");
     host.id = "pushvault-prompt";
@@ -173,13 +187,13 @@ interface RemoteConfig {
     const css = document.createElement("style");
     css.textContent =
       ".pv-bar{pointer-events:auto;display:flex;align-items:center;gap:12px;flex-wrap:wrap;" +
-      "margin:8px;padding:12px 16px;border-radius:12px;background:#fff;color:#1a1a2a;" +
-      "box-shadow:0 4px 24px rgba(0,0,0,.18);font:14px/1.4 system-ui,sans-serif;" +
+      "margin:8px;padding:" + sz.pad + ";border-radius:12px;background:#fff;color:#1a1a2a;" +
+      "box-shadow:0 4px 24px rgba(0,0,0,.18);font:" + sz.font + "/1.4 system-ui,sans-serif;" +
       "max-width:680px;margin-left:auto;margin-right:auto;}" +
-      ".pv-logo{width:28px;height:28px;border-radius:6px;object-fit:cover}" +
+      ".pv-logo{width:" + sz.logo + "px;height:" + sz.logo + "px;border-radius:6px;object-fit:cover}" +
       ".pv-head{flex:1;min-width:180px;font-weight:600}" +
       ".pv-actions{display:flex;gap:8px;align-items:center}" +
-      "button{cursor:pointer;border-radius:8px;font:600 13px system-ui,sans-serif;padding:8px 14px;border:1px solid #ddd;background:#f5f5f7;color:#333}" +
+      "button{cursor:pointer;border-radius:8px;font:600 " + sz.font + " system-ui,sans-serif;padding:" + sz.btn + ";border:1px solid #ddd;background:#f5f5f7;color:#333}" +
       ".pv-yes{background:" + accent + ";border-color:" + accent + ";color:#fff}" +
       ".pv-x{border:none;background:none;font-size:12px;color:#999;padding:4px 6px}";
     shadow.appendChild(css);
@@ -244,7 +258,21 @@ interface RemoteConfig {
     }
   }
 
+  function beaconPageview() {
+    try {
+      void fetch(API + "/event/pageview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ property_key: propertyKey, path: location.pathname }),
+        keepalive: true,
+      }).catch(() => undefined);
+    } catch {
+      /* ignore */
+    }
+  }
+
   async function init() {
+    beaconPageview();
     const prior = getChoice();
     if (prior) {
       if (prior.choice === "subscribed" || prior.choice === "yes") return;
