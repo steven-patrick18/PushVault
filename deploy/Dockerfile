@@ -11,7 +11,9 @@ COPY apps/api/package.json apps/api/
 COPY apps/dashboard/package.json apps/dashboard/
 COPY apps/snippet/package.json apps/snippet/
 COPY apps/demo-site/package.json apps/demo-site/
-RUN pnpm install --frozen-lockfile
+# newer pnpm enforces minimumReleaseAge (rejects packages <24h old) — our
+# lockfile is the trust source here, so disable the age check for CI builds
+RUN echo "minimum-release-age=0" > .npmrc && pnpm install --frozen-lockfile
 
 COPY . .
 
