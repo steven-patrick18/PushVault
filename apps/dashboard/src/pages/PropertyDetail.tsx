@@ -6,7 +6,21 @@ interface PromptConfig {
   trigger: { type: string; seconds?: number; percent?: number };
   pages: { include: string[]; exclude: string[] };
   text: { headline: string; yes: string; no: string };
-  style: { position: string; accent: string; logo: string | null; size?: string };
+  style: {
+    position: string;
+    accent: string;
+    logo: string | null;
+    size?: string; // legacy presets
+    x?: number;
+    y?: number;
+    width?: number;
+    radius?: number;
+    theme?: string;
+    bg?: string;
+    text_color?: string;
+    shadow?: string;
+    scale?: number;
+  };
   reask: {
     enabled: boolean;
     cooldown_days?: number; // legacy
@@ -41,7 +55,20 @@ const DEFAULT_CFG: PromptConfig = {
   trigger: { type: "delay", seconds: 12 },
   pages: { include: ["*"], exclude: [] },
   text: { headline: "🔔 Get offers & price-drop alerts?", yes: "Yes, notify me", no: "No thanks" },
-  style: { position: "top", accent: "#7C3AED", logo: null, size: "normal" },
+  style: {
+    position: "top",
+    accent: "#7C3AED",
+    logo: null,
+    x: 50,
+    y: 50,
+    width: 460,
+    radius: 12,
+    theme: "light",
+    bg: "",
+    text_color: "",
+    shadow: "soft",
+    scale: 1,
+  },
   reask: { enabled: false, cooldown_value: 7, cooldown_unit: "days" },
 };
 
@@ -57,26 +84,42 @@ export default function PropertyDetail() {
   const [guide, setGuide] = useState<"html" | "wordpress" | "shopify">("html");
   const [previewDevice, setPreviewDevice] = useState<"desktop" | "mobile">("desktop");
   const viewportRef = useRef<HTMLDivElement | null>(null);
-  const [dragY, setDragY] = useState<number | null>(null);
+  const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null);
 
-  // drag the banner on the mockup; drop in the top or bottom half to place it
+  const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+  // free drag: drop near the top/bottom edge → classic bar; anywhere else →
+  // floating banner anchored exactly where it was dropped (viewport %)
   function startBannerDrag(e: React.MouseEvent) {
     e.preventDefault();
-    const move = (ev: MouseEvent) => {
+    const pct = (ev: MouseEvent) => {
       const rect = viewportRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      setDragY(Math.min(Math.max(ev.clientY - rect.top, 10), rect.height - 30));
+      if (!rect) return null;
+      return {
+        x: clamp(((ev.clientX - rect.left) / rect.width) * 100, 4, 96),
+        y: clamp(((ev.clientY - rect.top) / rect.height) * 100, 4, 96),
+      };
+    };
+    const move = (ev: MouseEvent) => {
+      const p = pct(ev);
+      if (p) setDragPos(p);
     };
     const up = (ev: MouseEvent) => {
-      const rect = viewportRef.current?.getBoundingClientRect();
-      if (rect) {
-        const y = ev.clientY - rect.top;
+      const p = pct(ev);
+      if (p) {
         setCfg((c) => ({
           ...c,
-          style: { ...c.style, position: y < rect.height / 2 ? "top" : "bottom" },
+          style: {
+            ...c.style,
+            ...(p.y < 15
+              ? { position: "top" }
+              : p.y > 85
+                ? { position: "bottom" }
+                : { position: "float", x: Math.round(p.x), y: Math.round(p.y) }),
+          },
         }));
       }
-      setDragY(null);
+      setDragPos(null);
       window.removeEventListener("mousemove", move);
       window.removeEventListener("mouseup", up);
     };
@@ -84,11 +127,14 @@ export default function PropertyDetail() {
     window.addEventListener("mouseup", up);
   }
 
-  const SIZE_STEPS = ["compact", "normal", "large"] as const;
-  function stepSize(dir: 1 | -1) {
-    const i = SIZE_STEPS.indexOf((cfg.style.size ?? "normal") as (typeof SIZE_STEPS)[number]);
-    const next = SIZE_STEPS[Math.min(SIZE_STEPS.length - 1, Math.max(0, i + dir))];
-    setCfg({ ...cfg, style: { ...cfg.style, size: next } });
+  const legacyScale = { compact: 0.85, normal: 1, large: 1.15 } as const;
+  const bannerScale =
+    cfg.style.scale ?? legacyScale[(cfg.style.size ?? "normal") as keyof typeof legacyScale] ?? 1;
+  function stepScale(dir: 1 | -1) {
+    setCfg({
+      ...cfg,
+      style: { ...cfg.style, scale: +clamp(bannerScale + dir * 0.1, 0.7, 1.5).toFixed(2) },
+    });
   }
 
   const load = useCallback(() => {
@@ -159,7 +205,7 @@ export default function PropertyDetail() {
 
   if (!property) return <div className="page-sub">{error || "Loading…"}</div>;
 
-  const sizeScale = cfg.style.size === "compact" ? 0.85 : cfg.style.size === "large" ? 1.15 : 1;
+  const sizeScale = bannerScale;
 
   return (
     <>
@@ -380,23 +426,83 @@ export default function PropertyDetail() {
               </div>
             </div>
 
-            <div style={{ display: "flex", gap: 8 }}>
-              <div style={{ flex: 1 }}>
-                <label>Position</label>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              <div style={{ width: 190 }}>
+                <label>Placement</label>
                 <select value={cfg.style.position} onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, position: e.target.value } })}>
-                  <option value="top">Top of page</option>
-                  <option value="bottom">Bottom of page</option>
+                  <option value="top">Bar — top of page</option>
+                  <option value="bottom">Bar — bottom of page</option>
+                  <option value="float">Floating — place anywhere</option>
                 </select>
               </div>
-              <div style={{ flex: 1 }}>
-                <label>Size</label>
-                <select value={cfg.style.size ?? "normal"} onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, size: e.target.value } })}>
-                  <option value="compact">Compact</option>
-                  <option value="normal">Normal</option>
-                  <option value="large">Large</option>
-                </select>
+              {cfg.style.position === "float" && (
+                <>
+                  <div style={{ width: 90 }}>
+                    <label>X (%)</label>
+                    <input type="number" min={4} max={96} value={cfg.style.x ?? 50}
+                      onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, x: clamp(Number(e.target.value), 4, 96) } })} />
+                  </div>
+                  <div style={{ width: 90 }}>
+                    <label>Y (%)</label>
+                    <input type="number" min={4} max={96} value={cfg.style.y ?? 50}
+                      onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, y: clamp(Number(e.target.value), 4, 96) } })} />
+                  </div>
+                </>
+              )}
+              <div style={{ width: 110 }}>
+                <label>Width (px)</label>
+                <input type="number" min={220} max={900} step={10} value={cfg.style.width ?? 460}
+                  onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, width: clamp(Number(e.target.value), 220, 900) } })} />
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginTop: 4 }}>
+              <div style={{ width: 170 }}>
+                <label>Size scale — {bannerScale.toFixed(2)}×</label>
+                <input type="range" min={0.7} max={1.5} step={0.05} value={bannerScale}
+                  style={{ padding: 0, height: 28 }}
+                  onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, scale: Number(e.target.value) } })} />
+              </div>
+              <div style={{ width: 170 }}>
+                <label>Corner radius — {cfg.style.radius ?? 12}px</label>
+                <input type="range" min={0} max={28} step={1} value={cfg.style.radius ?? 12}
+                  style={{ padding: 0, height: 28 }}
+                  onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, radius: Number(e.target.value) } })} />
               </div>
               <div style={{ width: 120 }}>
+                <label>Shadow</label>
+                <select value={cfg.style.shadow ?? "soft"} onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, shadow: e.target.value } })}>
+                  <option value="none">None</option>
+                  <option value="soft">Soft</option>
+                  <option value="strong">Strong</option>
+                </select>
+              </div>
+            </div>
+
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginTop: 4 }}>
+              <div style={{ width: 130 }}>
+                <label>Theme</label>
+                <select
+                  value={cfg.style.theme ?? "light"}
+                  onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, theme: e.target.value, bg: "", text_color: "" } })}
+                >
+                  <option value="light">Light</option>
+                  <option value="dark">Dark</option>
+                </select>
+              </div>
+              <div style={{ width: 110 }}>
+                <label>Background</label>
+                <input type="color" style={{ padding: 2, height: 38 }}
+                  value={cfg.style.bg || (cfg.style.theme === "dark" ? "#20212b" : "#ffffff")}
+                  onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, bg: e.target.value } })} />
+              </div>
+              <div style={{ width: 110 }}>
+                <label>Text color</label>
+                <input type="color" style={{ padding: 2, height: 38 }}
+                  value={cfg.style.text_color || (cfg.style.theme === "dark" ? "#f0f0f5" : "#1a1a2a")}
+                  onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, text_color: e.target.value } })} />
+              </div>
+              <div style={{ width: 110 }}>
                 <label>Accent color</label>
                 <input type="color" value={cfg.style.accent} style={{ padding: 2, height: 38 }} onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, accent: e.target.value } })} />
               </div>
@@ -454,45 +560,67 @@ export default function PropertyDetail() {
             </div>
 
             {(() => {
-              const banner = (scale: number) => (
-                <div
-                  onMouseDown={startBannerDrag}
-                  title="Drag me — drop in the top or bottom half of the page"
-                  style={{
-                    position: "absolute",
-                    left: 8,
-                    right: 8,
-                    cursor: dragY !== null ? "grabbing" : "grab",
-                    userSelect: "none",
-                    outline: dragY !== null ? `2px dashed ${cfg.style.accent}` : undefined,
-                    outlineOffset: 3,
-                    ...(dragY !== null
-                      ? { top: dragY - 16 }
+              const banner = (scale: number) => {
+                const dark = cfg.style.theme === "dark";
+                const bg = cfg.style.bg || (dark ? "#20212b" : "#ffffff");
+                const textColor = cfg.style.text_color || (dark ? "#f0f0f5" : "#1a1a2a");
+                const radius = cfg.style.radius ?? 12;
+                const shadowCss =
+                  cfg.style.shadow === "none"
+                    ? "none"
+                    : cfg.style.shadow === "strong"
+                      ? "0 12px 40px rgba(0,0,0,.42)"
+                      : "0 4px 20px rgba(0,0,0,.25)";
+                const isFloat = cfg.style.position === "float";
+                // mockup is a shrunken page, so the configured px width is scaled down
+                const widthPx = Math.round((cfg.style.width ?? 460) * (previewDevice === "desktop" ? 0.45 : 0.8));
+                const s = scale * sizeScale;
+                const place: React.CSSProperties =
+                  dragPos !== null
+                    ? { left: `${dragPos.x}%`, top: `${dragPos.y}%`, transform: "translate(-50%,-50%)", width: widthPx, maxWidth: "92%" }
+                    : isFloat
+                      ? { left: `${cfg.style.x ?? 50}%`, top: `${cfg.style.y ?? 50}%`, transform: "translate(-50%,-50%)", width: widthPx, maxWidth: "92%" }
                       : cfg.style.position === "bottom"
-                        ? { bottom: 8 }
-                        : { top: 8 }),
-                    display: "flex",
-                    alignItems: "center",
-                    gap: 8 * scale,
-                    flexWrap: "wrap",
-                    background: "#fff",
-                    color: "#1a1a2a",
-                    borderRadius: 10,
-                    padding: `${9 * scale * sizeScale}px ${12 * scale * sizeScale}px`,
-                    boxShadow: "0 4px 20px rgba(0,0,0,.25)",
-                    fontSize: 11.5 * scale * sizeScale,
-                    zIndex: 5,
-                  }}
-                >
-                  {cfg.style.logo && <img src={cfg.style.logo} style={{ width: 20 * scale * sizeScale, height: 20 * scale * sizeScale, borderRadius: 5, objectFit: "cover" }} />}
-                  <span style={{ flex: 1, fontWeight: 600, minWidth: 90 }}>{cfg.text.headline || "Get notified?"}</span>
-                  <span style={{ display: "flex", gap: 5 }}>
-                    <span style={{ background: cfg.style.accent, color: "#fff", borderRadius: 7, padding: `${5 * scale * sizeScale}px ${9 * scale * sizeScale}px`, fontWeight: 600, whiteSpace: "nowrap" }}>{cfg.text.yes || "Yes"}</span>
-                    <span style={{ background: "#f5f5f7", color: "#333", border: "1px solid #ddd", borderRadius: 7, padding: `${5 * scale * sizeScale}px ${9 * scale * sizeScale}px`, fontWeight: 600, whiteSpace: "nowrap" }}>{cfg.text.no || "No"}</span>
-                    <span style={{ color: "#999", padding: `${5 * scale * sizeScale}px 3px` }}>✕</span>
-                  </span>
-                </div>
-              );
+                        ? { left: 8, right: 8, bottom: 8, maxWidth: widthPx, margin: "0 auto" }
+                        : { left: 8, right: 8, top: 8, maxWidth: widthPx, margin: "0 auto" };
+                const noBg = dark ? "#34353f" : "#f5f5f7";
+                const noColor = dark ? "#d5d5dd" : "#333";
+                const noBorder = dark ? "#4a4b55" : "#ddd";
+                const btnRadius = Math.max(3, Math.round(radius * 0.6));
+                return (
+                  <div
+                    onMouseDown={startBannerDrag}
+                    title="Drag me anywhere — dropping near the top/bottom edge makes it a bar"
+                    style={{
+                      position: "absolute",
+                      cursor: dragPos !== null ? "grabbing" : "grab",
+                      userSelect: "none",
+                      outline: dragPos !== null ? `2px dashed ${cfg.style.accent}` : undefined,
+                      outlineOffset: 3,
+                      ...place,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 8 * s,
+                      flexWrap: "wrap",
+                      background: bg,
+                      color: textColor,
+                      borderRadius: radius,
+                      padding: `${9 * s}px ${12 * s}px`,
+                      boxShadow: shadowCss,
+                      fontSize: 11.5 * s,
+                      zIndex: 5,
+                    }}
+                  >
+                    {cfg.style.logo && <img src={cfg.style.logo} style={{ width: 20 * s, height: 20 * s, borderRadius: 5, objectFit: "cover" }} />}
+                    <span style={{ flex: 1, fontWeight: 600, minWidth: 80 }}>{cfg.text.headline || "Get notified?"}</span>
+                    <span style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
+                      <span style={{ background: cfg.style.accent, color: "#fff", borderRadius: btnRadius, padding: `${5 * s}px ${9 * s}px`, fontWeight: 600, whiteSpace: "nowrap" }}>{cfg.text.yes || "Yes"}</span>
+                      <span style={{ background: noBg, color: noColor, border: `1px solid ${noBorder}`, borderRadius: btnRadius, padding: `${5 * s}px ${9 * s}px`, fontWeight: 600, whiteSpace: "nowrap" }}>{cfg.text.no || "No"}</span>
+                      <span style={{ color: "#999", padding: `${5 * s}px 3px` }}>✕</span>
+                    </span>
+                  </div>
+                );
+              };
 
               const chip = (label: string, onClick: () => void, active = false, tip = "") => (
                 <button
@@ -518,10 +646,11 @@ export default function PropertyDetail() {
               // on-screen placement + resize controls, overlaid on the mockup
               const overlayControls = (
                 <div style={{ position: "absolute", top: 6, right: 6, zIndex: 10, display: "flex", gap: 4 }}>
-                  {chip("▲", () => setCfg({ ...cfg, style: { ...cfg.style, position: "top" } }), cfg.style.position !== "bottom", "Place at top")}
-                  {chip("▼", () => setCfg({ ...cfg, style: { ...cfg.style, position: "bottom" } }), cfg.style.position === "bottom", "Place at bottom")}
-                  {chip("A−", () => stepSize(-1), false, "Smaller banner")}
-                  {chip("A+", () => stepSize(1), false, "Bigger banner")}
+                  {chip("▲", () => setCfg({ ...cfg, style: { ...cfg.style, position: "top" } }), cfg.style.position === "top", "Top bar")}
+                  {chip("◎", () => setCfg({ ...cfg, style: { ...cfg.style, position: "float", x: 50, y: 50 } }), cfg.style.position === "float", "Float — center (then drag anywhere)")}
+                  {chip("▼", () => setCfg({ ...cfg, style: { ...cfg.style, position: "bottom" } }), cfg.style.position === "bottom", "Bottom bar")}
+                  {chip("A−", () => stepScale(-1), false, "Smaller banner")}
+                  {chip("A+", () => stepScale(1), false, "Bigger banner")}
                 </div>
               );
 
@@ -608,14 +737,19 @@ export default function PropertyDetail() {
             })()}
 
             <div className="preview-note" style={{ maxWidth: "100%", textAlign: "center" }}>
-              ✋ <b>Drag the banner</b> to place it (top/bottom half), or use ▲ ▼ and A− A+ on the preview.
+              ✋ <b>Drag the banner anywhere</b> — the middle floats it exactly there, near the top/bottom edge
+              makes it a bar. Chips: ▲ ◎ ▼ place, A− A+ resize.
               Appears{" "}
               {cfg.trigger.type === "delay"
                 ? `${cfg.trigger.seconds ?? 12}s after page load`
                 : cfg.trigger.type === "scroll"
                   ? `after scrolling ${cfg.trigger.percent ?? 40}%`
                   : "on exit intent"}{" "}
-              · {cfg.style.position} of page · size {cfg.style.size ?? "normal"} · never blocks the page content.
+              ·{" "}
+              {cfg.style.position === "float"
+                ? `floating at ${cfg.style.x ?? 50}% / ${cfg.style.y ?? 50}%`
+                : `${cfg.style.position} bar`}{" "}
+              · scale {bannerScale.toFixed(2)}× · never blocks the page content.
               Remember to hit <b>Save prompt settings</b>.
             </div>
           </div>

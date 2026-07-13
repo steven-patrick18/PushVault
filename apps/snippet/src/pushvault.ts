@@ -13,10 +13,20 @@ interface PromptConfig {
   pages?: { include?: string[]; exclude?: string[] };
   text?: { headline?: string; yes?: string; no?: string };
   style?: {
-    position?: "top" | "bottom";
+    position?: "top" | "bottom" | "float";
+    /** float mode anchor, in viewport % (banner center) */
+    x?: number;
+    y?: number;
+    width?: number; // max width px
+    radius?: number;
+    theme?: "light" | "dark";
+    bg?: string;
+    text_color?: string;
+    shadow?: "none" | "soft" | "strong";
+    scale?: number; // fine size, ~0.7–1.5
     accent?: string;
     logo?: string | null;
-    size?: "compact" | "normal" | "large";
+    size?: "compact" | "normal" | "large"; // legacy presets → scale
   };
   reask?: {
     enabled?: boolean;
@@ -164,22 +174,39 @@ interface RemoteConfig {
     const text = pc.text ?? {};
     const style = pc.style ?? {};
     const accent = style.accent || "#7C3AED";
-    const position = style.position === "bottom" ? "bottom" : "top";
-    const sizes = {
-      compact: { font: "12.5px", pad: "8px 12px", btn: "6px 10px", logo: 22 },
-      normal: { font: "14px", pad: "12px 16px", btn: "8px 14px", logo: 28 },
-      large: { font: "16px", pad: "16px 22px", btn: "10px 18px", logo: 36 },
-    } as const;
-    const sz = sizes[style.size ?? "normal"] ?? sizes.normal;
+    const mode = style.position === "bottom" ? "bottom" : style.position === "float" ? "float" : "top";
+    const legacyScale = { compact: 0.85, normal: 1, large: 1.15 } as const;
+    const scale = Math.min(1.6, Math.max(0.6, style.scale ?? legacyScale[style.size ?? "normal"] ?? 1));
+    const dark = style.theme === "dark";
+    const bg = style.bg || (dark ? "#20212b" : "#ffffff");
+    const textColor = style.text_color || (dark ? "#f0f0f5" : "#1a1a2a");
+    const radius = style.radius ?? 12;
+    const shadowCss =
+      style.shadow === "none"
+        ? "none"
+        : style.shadow === "strong"
+          ? "0 12px 44px rgba(0,0,0,.38)"
+          : "0 4px 24px rgba(0,0,0,.18)";
+    const maxWidth = Math.min(Math.max(style.width ?? 680, 220), 900);
+    const px = (n: number) => Math.round(n * scale) + "px";
 
     const host = document.createElement("div");
     host.id = "pushvault-prompt";
-    // 3. fixed banner — overlays nothing interactive, never blocks scroll/clicks
+    // 3. fixed overlay — pointer-events pass through everywhere except the banner
     host.style.cssText =
-      "position:fixed;" + position + ":0;left:0;right:0;z-index:2147483000;pointer-events:none;";
+      mode === "float"
+        ? "position:fixed;inset:0;z-index:2147483000;pointer-events:none;"
+        : "position:fixed;" + mode + ":0;left:0;right:0;z-index:2147483000;pointer-events:none;";
     const shadow = host.attachShadow({ mode: "closed" });
 
     const wrap = document.createElement("div");
+    if (mode === "float") {
+      const fx = Math.min(95, Math.max(5, style.x ?? 50));
+      const fy = Math.min(95, Math.max(5, style.y ?? 50));
+      wrap.style.cssText =
+        "position:absolute;left:" + fx + "%;top:" + fy + "%;transform:translate(-50%,-50%);" +
+        "width:min(" + maxWidth + "px,94vw);pointer-events:none;";
+    }
     wrap.innerHTML =
       '<div class="pv-bar" role="dialog" aria-label="Notification opt-in">' +
       (style.logo ? '<img class="pv-logo" src="' + style.logo + '" alt="">' : "") +
@@ -189,18 +216,21 @@ interface RemoteConfig {
       '<button class="pv-no"></button>' +
       '<button class="pv-x" aria-label="Dismiss">&#10005;</button>' +
       "</span></div>";
+    const noBg = dark ? "#34353f" : "#f5f5f7";
+    const noColor = dark ? "#d5d5dd" : "#333";
+    const noBorder = dark ? "#4a4b55" : "#ddd";
     const css = document.createElement("style");
     css.textContent =
-      ".pv-bar{pointer-events:auto;display:flex;align-items:center;gap:12px;flex-wrap:wrap;" +
-      "margin:8px;padding:" + sz.pad + ";border-radius:12px;background:#fff;color:#1a1a2a;" +
-      "box-shadow:0 4px 24px rgba(0,0,0,.18);font:" + sz.font + "/1.4 system-ui,sans-serif;" +
-      "max-width:680px;margin-left:auto;margin-right:auto;}" +
-      ".pv-logo{width:" + sz.logo + "px;height:" + sz.logo + "px;border-radius:6px;object-fit:cover}" +
-      ".pv-head{flex:1;min-width:180px;font-weight:600}" +
-      ".pv-actions{display:flex;gap:8px;align-items:center}" +
-      "button{cursor:pointer;border-radius:8px;font:600 " + sz.font + " system-ui,sans-serif;padding:" + sz.btn + ";border:1px solid #ddd;background:#f5f5f7;color:#333}" +
+      ".pv-bar{pointer-events:auto;display:flex;align-items:center;gap:" + px(12) + ";flex-wrap:wrap;" +
+      (mode === "float" ? "margin:0;" : "margin:8px auto;max-width:" + maxWidth + "px;") +
+      "padding:" + px(12) + " " + px(16) + ";border-radius:" + radius + "px;background:" + bg + ";color:" + textColor + ";" +
+      "box-shadow:" + shadowCss + ";font:" + px(14) + "/1.4 system-ui,sans-serif;}" +
+      ".pv-logo{width:" + px(28) + ";height:" + px(28) + ";border-radius:6px;object-fit:cover}" +
+      ".pv-head{flex:1;min-width:140px;font-weight:600}" +
+      ".pv-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}" +
+      "button{cursor:pointer;border-radius:" + Math.max(4, Math.round(radius * 0.66)) + "px;font:600 " + px(13) + " system-ui,sans-serif;padding:" + px(8) + " " + px(14) + ";border:1px solid " + noBorder + ";background:" + noBg + ";color:" + noColor + "}" +
       ".pv-yes{background:" + accent + ";border-color:" + accent + ";color:#fff}" +
-      ".pv-x{border:none;background:none;font-size:12px;color:#999;padding:4px 6px}";
+      ".pv-x{border:none;background:none;font-size:" + px(12) + ";color:#999;padding:4px 6px}";
     shadow.appendChild(css);
     shadow.appendChild(wrap);
 
