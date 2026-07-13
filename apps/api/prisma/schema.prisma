@@ -1,0 +1,260 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------- enums ----------
+
+enum UserRole {
+  admin
+  manager
+  client
+
+  @@map("user_role")
+}
+
+enum SubscriberStatus {
+  active
+  unsubscribed
+  expired
+
+  @@map("subscriber_status")
+}
+
+enum DeviceType {
+  mobile
+  desktop
+  tablet
+
+  @@map("device_type")
+}
+
+enum CampaignStatus {
+  draft
+  scheduled
+  sending
+  sent
+  cancelled
+  failed
+
+  @@map("campaign_status")
+}
+
+enum SendStatus {
+  queued
+  sent
+  failed
+  expired
+
+  @@map("send_status")
+}
+
+// ---------- models ----------
+
+model Tenant {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name              String
+  brandName         String?   @map("brand_name")
+  brandLogoUrl      String?   @map("brand_logo_url")
+  brandPrimaryColor String?   @map("brand_primary_color")
+  customDomain      String?   @map("custom_domain")
+  plan              String    @default("internal")
+  status            String    @default("active")
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt         DateTime? @updatedAt @map("updated_at") @db.Timestamptz()
+
+  users       User[]
+  properties  Property[]
+  subscribers Subscriber[]
+  segments    Segment[]
+  campaigns   Campaign[]
+  sends       Send[]
+  auditLogs   AuditLog[]
+
+  @@map("tenants")
+}
+
+model User {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId     String    @map("tenant_id") @db.Uuid
+  email        String    @unique
+  passwordHash String    @map("password_hash")
+  role         UserRole
+  propertyIds  String[]  @map("property_ids") @db.Uuid
+  lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz()
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt    DateTime? @updatedAt @map("updated_at") @db.Timestamptz()
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@map("users")
+}
+
+model Property {
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId            String    @map("tenant_id") @db.Uuid
+  name                String
+  propertyKey         String    @unique @map("property_key")
+  domains             String[]
+  iconUrl             String?   @map("icon_url")
+  promptConfig        Json      @default("{}") @map("prompt_config")
+  vapidPublic         String?   @map("vapid_public")
+  vapidPrivate        String?   @map("vapid_private")
+  frequencyCapPerDay  Int       @default(2) @map("frequency_cap_per_day")
+  frequencyCapPerWeek Int       @default(8) @map("frequency_cap_per_week")
+  monthlySendQuota    BigInt?   @map("monthly_send_quota")
+  status              String    @default("active")
+  apiKeyHash          String?   @map("api_key_hash")
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt           DateTime? @updatedAt @map("updated_at") @db.Timestamptz()
+
+  tenant      Tenant       @relation(fields: [tenantId], references: [id])
+  subscribers Subscriber[]
+  segments    Segment[]
+  campaigns   Campaign[]
+
+  @@index([tenantId])
+  @@map("properties")
+}
+
+model Subscriber {
+  id             String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId       String           @map("tenant_id") @db.Uuid
+  propertyId     String           @map("property_id") @db.Uuid
+  endpoint       String
+  p256dh         String
+  auth           String
+  status         SubscriberStatus @default(active)
+  utmSource      String?          @map("utm_source")
+  utmMedium      String?          @map("utm_medium")
+  utmCampaign    String?          @map("utm_campaign")
+  utmContent     String?          @map("utm_content")
+  utmTerm        String?          @map("utm_term")
+  landingUrl     String?          @map("landing_url")
+  referrer       String?
+  country        String?          @db.Char(2)
+  region         String?
+  city           String?
+  device         DeviceType?
+  browser        String?
+  os             String?
+  language       String?
+  timezone       String?
+  pushesReceived Int              @default(0) @map("pushes_received")
+  pushesClicked  Int              @default(0) @map("pushes_clicked")
+  lastPushAt     DateTime?        @map("last_push_at") @db.Timestamptz()
+  lastClickAt    DateTime?        @map("last_click_at") @db.Timestamptz()
+  subscribedAt   DateTime         @default(now()) @map("subscribed_at") @db.Timestamptz()
+  unsubscribedAt DateTime?        @map("unsubscribed_at") @db.Timestamptz()
+  createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt      DateTime?        @updatedAt @map("updated_at") @db.Timestamptz()
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
+  property Property @relation(fields: [propertyId], references: [id])
+  sends    Send[]
+
+  @@unique([propertyId, endpoint])
+  @@index([propertyId, status])
+  @@index([propertyId, utmCampaign])
+  @@index([propertyId, subscribedAt])
+  @@index([propertyId, country])
+  @@map("subscribers")
+}
+
+model Segment {
+  id          String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId    String    @map("tenant_id") @db.Uuid
+  propertyId  String    @map("property_id") @db.Uuid
+  name        String
+  criteria    Json
+  isDynamic   Boolean   @default(true) @map("is_dynamic")
+  cachedCount Int?      @map("cached_count")
+  cachedAt    DateTime? @map("cached_at") @db.Timestamptz()
+  createdAt   DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt   DateTime? @updatedAt @map("updated_at") @db.Timestamptz()
+
+  tenant    Tenant     @relation(fields: [tenantId], references: [id])
+  property  Property   @relation(fields: [propertyId], references: [id])
+  campaigns Campaign[]
+
+  @@index([tenantId])
+  @@map("segments")
+}
+
+model Campaign {
+  id                 String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId           String         @map("tenant_id") @db.Uuid
+  propertyId         String         @map("property_id") @db.Uuid
+  name               String
+  title              String
+  body               String
+  iconUrl            String?        @map("icon_url")
+  imageUrl           String?        @map("image_url")
+  clickUrl           String         @map("click_url")
+  actions            Json?
+  segmentId          String?        @map("segment_id") @db.Uuid
+  status             CampaignStatus @default(draft)
+  scheduleAt         DateTime?      @map("schedule_at") @db.Timestamptz()
+  recurrence         Json?
+  abConfig           Json?          @map("ab_config")
+  totalTargeted      Int?           @map("total_targeted")
+  totalSent          Int            @default(0) @map("total_sent")
+  totalDelivered     Int            @default(0) @map("total_delivered")
+  totalClicked       Int            @default(0) @map("total_clicked")
+  totalFailed        Int            @default(0) @map("total_failed")
+  totalExpiredPruned Int            @default(0) @map("total_expired_pruned")
+  startedAt          DateTime?      @map("started_at") @db.Timestamptz()
+  finishedAt         DateTime?      @map("finished_at") @db.Timestamptz()
+  createdAt          DateTime       @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt          DateTime?      @updatedAt @map("updated_at") @db.Timestamptz()
+
+  tenant   Tenant   @relation(fields: [tenantId], references: [id])
+  property Property @relation(fields: [propertyId], references: [id])
+  segment  Segment? @relation(fields: [segmentId], references: [id])
+  sends    Send[]
+
+  @@index([tenantId, status])
+  @@map("campaigns")
+}
+
+model Send {
+  id           String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId     String     @map("tenant_id") @db.Uuid
+  campaignId   String     @map("campaign_id") @db.Uuid
+  subscriberId String     @map("subscriber_id") @db.Uuid
+  status       SendStatus @default(queued)
+  clicked      Boolean    @default(false)
+  errorCode    String?    @map("error_code")
+  sentAt       DateTime?  @map("sent_at") @db.Timestamptz()
+  clickedAt    DateTime?  @map("clicked_at") @db.Timestamptz()
+  createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz()
+
+  tenant     Tenant     @relation(fields: [tenantId], references: [id])
+  campaign   Campaign   @relation(fields: [campaignId], references: [id])
+  subscriber Subscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+
+  @@index([campaignId, status])
+  @@map("sends")
+}
+
+model AuditLog {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String   @map("tenant_id") @db.Uuid
+  userId     String?  @map("user_id") @db.Uuid
+  action     String
+  entityType String   @map("entity_type")
+  entityId   String?  @map("entity_id") @db.Uuid
+  before     Json?
+  after      Json?
+  ip         String?
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  tenant Tenant @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, createdAt])
+  @@map("audit_log")
+}

@@ -1,0 +1,378 @@
+# PushVault — Developer Build Document / AI Build Prompt
+**Version:** 1.0 · Technical companion to the PushVault Master Spec
+**Audience:** A developer or coding AI (Claude Code / Fable 5). This document is sufficient to build Phase 1 end-to-end without further clarification.
+**Usage as AI prompt:** Paste Sections 1–9 for the backend build. Paste Section 10 for the client snippet + service worker. Paste one milestone (Section 12) at a time.
+
+---
+
+## 1. Product summary (context for the builder)
+
+PushVault is a **multi-tenant web push notification platform**. Client websites install a JS snippet + service worker. Visitors opt in via a compliant two-step prompt. Subscribers are stored with full ad-campaign (UTM) attribution. Operators segment subscribers (date range, campaign, geo, device, engagement) and send push campaigns (now/scheduled/recurring). Analytics track delivery/clicks.
+
+**Non-negotiable product rules (enforce in code, not docs):**
+1. The soft prompt must NEVER block page content. No gating.
+2. Browser permission prompt fires ONLY after the user accepts the soft prompt.
+3. Frequency caps enforced server-side per subscriber.
+4. Unsubscribe/expired tokens are honored immediately (no sends to `status != 'active'`).
+5. Every subscriber row must carry `tenant_id` and `property_id`. No cross-tenant data access, enforced with Postgres RLS.
+
+---
+
+## 2. Tech stack (fixed choices — do not substitute)
+
+| Layer | Choice |
+|---|---|
+| Backend API | **Node.js 20+, NestJS**, TypeScript |
+| Push sending | **`web-push`** npm library (VAPID) |
+| DB | **PostgreSQL 15+**, partitioned, RLS |
+| ORM | Prisma (or TypeORM; pick one, be consistent) |
+| Queue | **Redis 7 + BullMQ** |
+| Frontend dashboard | React + Vite, TypeScript |
+| Snippet | Vanilla JS (ES2017, no framework), < 15 KB gzipped |
+| Auth | JWT (dashboard), API keys (programmatic) |
+| Geo | MaxMind GeoLite2 (local DB lookup at subscribe time) |
+| Storage | S3-compatible (notification icons/images) |
+| Deploy | Docker + docker-compose (dev), Kubernetes-ready (prod) |
+
+---
+
+## 3. Environment & keys
+
+```
+DATABASE_URL=postgres://...
+REDIS_URL=redis://...
+VAPID_PUBLIC_KEY=...        # generate once per install: npx web-push generate-vapid-keys
+VAPID_PRIVATE_KEY=...
+VAPID_SUBJECT=mailto:ops@pushvault.example
+JWT_SECRET=...
+S3_ENDPOINT/S3_KEY/S3_SECRET/S3_BUCKET=...
+GEOIP_DB_PATH=/data/GeoLite2-City.mmdb
+APP_BASE_URL=https://app.pushvault.example
+CDN_BASE_URL=https://cdn.pushvault.example
+```
+
+VAPID keys are platform-global in v1 (per-tenant keys are a Phase 3 enhancement; design the `properties` table with nullable `vapid_public/private` columns now).
+
+---
+
+## 4. Database schema (PostgreSQL — complete DDL intent)
+
+All tables: `id UUID PK default gen_random_uuid()`, `created_at timestamptz default now()`, `updated_at timestamptz`. RLS enabled on every tenant-scoped table with policy `tenant_id = current_setting('app.tenant_id')::uuid`.
+
+```sql
+-- tenants: the agency/owner (white-label root)
+tenants (
+  id, name text, brand_name text, brand_logo_url text,
+  brand_primary_color text, custom_domain text,
+  plan text default 'internal', status text default 'active'
+)
+
+-- users: dashboard logins
+users (
+  id, tenant_id FK, email citext unique, password_hash text,
+  role text check (role in ('admin','manager','client')),
+  property_ids uuid[] null,   -- for role=client: which properties they may view
+  last_login_at timestamptz
+)
+
+-- properties: one client website
+properties (
+  id, tenant_id FK, name text, domains text[] not null,
+  icon_url text,                       -- default notification icon
+  prompt_config jsonb not null default '{}',  -- see §10.2
+  vapid_public text null, vapid_private text null,
+  frequency_cap_per_day int default 2,
+  frequency_cap_per_week int default 8,
+  monthly_send_quota bigint null,      -- tenant plan enforcement
+  status text default 'active',
+  api_key_hash text null
+)
+
+-- subscribers: partitioned BY LIST (tenant_id) or HASH; carry both ids
+subscribers (
+  id, tenant_id, property_id FK,
+  endpoint text not null,              -- unique per (property_id, endpoint)
+  p256dh text not null, auth text not null,
+  status text check (status in ('active','unsubscribed','expired')) default 'active',
+  -- attribution (captured at subscribe)
+  utm_source text, utm_medium text, utm_campaign text,
+  utm_content text, utm_term text,
+  landing_url text, referrer text,
+  -- context
+  country char(2), region text, city text,
+  device text check (device in ('mobile','desktop','tablet')),
+  browser text, os text, language text, timezone text,
+  -- engagement
+  pushes_received int default 0, pushes_clicked int default 0,
+  last_push_at timestamptz, last_click_at timestamptz,
+  subscribed_at timestamptz default now(),
+  unsubscribed_at timestamptz
+)
+-- indexes: (property_id, status), (property_id, utm_campaign),
+-- (property_id, subscribed_at), (property_id, country), GIN on nothing needed v1
+-- unique (property_id, endpoint)
+
+-- segments
+segments (
+  id, tenant_id, property_id FK, name text,
+  criteria jsonb not null,   -- see §6 filter grammar
+  is_dynamic boolean default true,   -- dynamic = evaluated at send time
+  cached_count int null, cached_at timestamptz
+)
+
+-- campaigns
+campaigns (
+  id, tenant_id, property_id FK, name text,
+  title text not null, body text not null,
+  icon_url text, image_url text, click_url text not null,
+  actions jsonb null,        -- up to 2: [{action,title,url}]
+  segment_id FK null,        -- null = all active subscribers of property
+  status text check (status in ('draft','scheduled','sending','sent','cancelled','failed')) default 'draft',
+  schedule_at timestamptz null,
+  recurrence jsonb null,     -- {rrule: "..."} Phase 2
+  ab_config jsonb null,      -- Phase 3
+  -- result counters (denormalized)
+  total_targeted int, total_sent int default 0,
+  total_delivered int default 0, total_clicked int default 0,
+  total_failed int default 0, total_expired_pruned int default 0,
+  started_at timestamptz, finished_at timestamptz
+)
+
+-- sends: one row per subscriber per campaign (v1; move to ClickHouse at scale)
+sends (
+  id, tenant_id, campaign_id FK, subscriber_id FK,
+  status text check (status in ('queued','sent','failed','expired')),
+  clicked boolean default false,
+  error_code text null,      -- e.g. '410','429','timeout'
+  sent_at timestamptz, clicked_at timestamptz
+)
+-- partition by RANGE (sent_at) monthly; index (campaign_id,status)
+
+-- audit_log
+audit_log (
+  id, tenant_id, user_id null, action text, entity_type text,
+  entity_id uuid, before jsonb null, after jsonb null, ip inet
+)
+```
+
+---
+
+## 5. API surface (REST, `/api/v1`)
+
+**Auth:** `Authorization: Bearer <jwt>` for dashboard routes; `X-Api-Key` for programmatic. All routes tenant-scoped by token. Public routes marked ⭘.
+
+```
+⭘ POST /public/subscribe            body: {property_key, subscription:{endpoint,keys}, utm:{...},
+                                          landing_url, referrer, tz, lang}
+                                    server derives: geo from IP, device/browser/os from UA
+⭘ POST /public/unsubscribe          body: {property_key, endpoint}
+⭘ POST /public/event/click          body: {send_id}   (called by service worker on notificationclick)
+⭘ GET  /public/prompt-config        ?property_key=   (snippet fetches prompt_config)
+
+POST /auth/login · POST /auth/refresh
+
+GET/POST/PATCH /properties          CRUD; POST returns property_key + install instructions
+POST /properties/:id/rotate-api-key
+
+GET  /subscribers                   ?property_id&status&utm_campaign&from&to&country&device&page
+GET  /subscribers/stats             growth by day, by utm_campaign
+DELETE /subscribers/:id             (GDPR/DPDP erasure; also called by unsubscribe)
+
+GET/POST/PATCH/DELETE /segments     ; POST /segments/:id/count  (evaluate live count)
+
+GET/POST/PATCH /campaigns
+POST /campaigns/:id/send-now
+POST /campaigns/:id/schedule        body:{schedule_at}
+POST /campaigns/:id/cancel
+POST /campaigns/:id/test-send       body:{subscriber_id}  (send to one subscriber)
+GET  /campaigns/:id/report
+
+GET  /dashboard/overview            KPIs per property: subs, growth, last campaigns CTR
+```
+
+**Subscribe endpoint behavior (critical path):**
+1. Validate `property_key` → resolve property + tenant; validate Origin header ∈ property.domains.
+2. Upsert on `(property_id, endpoint)`; if existing & unsubscribed → reactivate.
+3. GeoIP lookup, UA parse, persist attribution.
+4. Return `201 {subscriber_id}`. Must respond < 150 ms; do geo/UA parse inline (cheap), nothing else.
+
+---
+
+## 6. Segment filter grammar (`segments.criteria` jsonb)
+
+```json
+{
+  "all": [
+    {"field":"subscribed_at","op":"between","value":["2026-06-01","2026-06-30"]},
+    {"field":"utm_campaign","op":"in","value":["diwali_sale","summer_ac"]},
+    {"field":"device","op":"eq","value":"mobile"},
+    {"field":"country","op":"eq","value":"IN"},
+    {"field":"pushes_clicked","op":"gte","value":1},
+    {"field":"last_push_at","op":"older_than_days","value":14}
+  ]
+}
+```
+Supported ops: `eq, neq, in, nin, between, gte, lte, contains (landing_url), older_than_days, newer_than_days`. Compile to parameterized SQL. Always append `status='active' AND property_id=$X`. Reject unknown fields (whitelist).
+
+---
+
+## 7. Send pipeline (BullMQ) — the core engine
+
+**Queues:**
+- `campaign-orchestrator` (one job per campaign send)
+- `push-send:{tenantId}` (per-tenant send queues — fairness)
+- `campaign-scheduler` (delayed jobs for scheduled sends)
+- `maintenance` (token pruning, cache counts)
+
+**Orchestrator job (`campaign:dispatch`):**
+1. Set campaign `sending`, `started_at`.
+2. Evaluate segment → stream subscriber ids (server-side cursor, batch 1,000).
+3. **Frequency-cap filter:** skip subscribers whose `pushes_received` in last 24h/7d ≥ property caps (compute via `last_push_at` + Redis counters `fc:{subId}:{day}` with TTL).
+4. Insert `sends` rows (status `queued`) in batches; enqueue jobs to `push-send:{tenantId}` with `{send_id, subscription, payload}` — payload built once per campaign.
+5. Set `total_targeted`.
+
+**Send worker (concurrency 50 per worker process):**
+```ts
+const payload = JSON.stringify({ title, body, icon, image, url, send_id, actions });
+try {
+  await webpush.sendNotification(subscription, payload, {
+    TTL: 86400, urgency: 'normal',
+    vapidDetails: { subject, publicKey, privateKey }
+  });
+  mark send sent; incr subscriber.pushes_received, last_push_at;
+} catch (e) {
+  if (e.statusCode === 404 || e.statusCode === 410) {
+    mark send expired; subscriber.status='expired';        // prune dead token
+  } else if (e.statusCode === 429) {
+    reQueue with exponential backoff (max 3 attempts);
+  } else { mark failed with error_code; }
+}
+```
+
+**Fairness:** one BullMQ Worker per tenant queue with per-tenant `concurrency` from plan (e.g., 25 default, 100 premium). A global Redis token bucket caps total outbound RPS (start 500/s, configurable).
+
+**Completion:** orchestrator polls counters; when queued=0 → status `sent`, `finished_at`, denormalize totals.
+
+**Scheduler:** BullMQ delayed job at `schedule_at` triggers `campaign:dispatch`. Cancellation removes the delayed job and sets `cancelled`.
+
+---
+
+## 8. Click & delivery tracking
+
+- "Delivered" in v1 = accepted by push service (2xx). True display receipts are not available in web push; document this in the dashboard tooltip.
+- Click: service worker `notificationclick` → `fetch(APP_BASE_URL + '/api/v1/public/event/click', {send_id})` then `clients.openWindow(url)`. Endpoint sets `sends.clicked`, `clicked_at`, increments subscriber + campaign counters. Idempotent.
+
+---
+
+## 9. Security & compliance checklist (enforce in code review)
+
+- [ ] RLS on all tenant tables; app sets `app.tenant_id` per request.
+- [ ] Origin validation on all `/public/*` against property.domains (+ CORS allowlist).
+- [ ] API keys stored hashed (argon2); shown once on creation.
+- [ ] Rate limits: /public/subscribe 10/min/IP/property; auth 5/min/IP.
+- [ ] No PII in subscribers beyond coarse geo — never store IP long-term (use, then discard; keep country/region/city only).
+- [ ] Erasure endpoint hard-deletes subscriber + their sends rows.
+- [ ] Audit log on: campaign send, segment change, subscriber export/delete, key rotation.
+- [ ] Payload size < 4 KB (push service limit).
+- [ ] All secrets via env; none in repo.
+
+---
+
+## 10. Client-side package
+
+### 10.1 `pv-sw.js` (service worker — served from client's domain root)
+```js
+self.addEventListener('push', (e) => {
+  const d = e.data.json();
+  e.waitUntil(self.registration.showNotification(d.title, {
+    body: d.body, icon: d.icon, image: d.image,
+    data: { url: d.url, send_id: d.send_id }, actions: d.actions || []
+  }));
+});
+self.addEventListener('notificationclick', (e) => {
+  e.notification.close();
+  const { url, send_id } = e.notification.data;
+  e.waitUntil((async () => {
+    try { await fetch('__APP_BASE__/api/v1/public/event/click',
+      { method:'POST', headers:{'Content-Type':'application/json'},
+        body: JSON.stringify({ send_id }), keepalive:true }); } catch(_) {}
+    const all = await clients.matchAll({ type:'window' });
+    for (const c of all) { if (c.url === url && 'focus' in c) return c.focus(); }
+    return clients.openWindow(url);
+  })());
+});
+```
+
+### 10.2 `pushvault.js` (snippet) — behavior spec
+1. Init with `data-property-key`. Fetch `/public/prompt-config` (cached 1h in localStorage).
+2. `prompt_config` shape:
+```json
+{ "trigger": {"type":"delay","seconds":12} | {"type":"scroll","percent":40} | {"type":"exit_intent"},
+  "pages": {"include":["/product/*"], "exclude":["/checkout*"]},
+  "text": {"headline":"🔔 Get offers & price-drop alerts?","yes":"Yes, notify me","no":"No thanks"},
+  "style": {"position":"top","accent":"#7C3AED","logo":"https://..."},
+  "reask": {"enabled":false,"cooldown_days":7} }
+```
+3. On trigger: render soft banner (shadow DOM, position top or bottom, dismissible, **never overlays main content or blocks scroll/clicks**). Respect prior choice in localStorage (`pv_choice`: yes/no/subscribed + timestamp).
+4. On "Yes": `Notification.requestPermission()` → if granted: `navigator.serviceWorker.register('/pv-sw.js')` → `pushManager.subscribe({userVisibleOnly:true, applicationServerKey:<VAPID public>})` → POST `/public/subscribe` with subscription + UTMs parsed from `location.search` + `document.referrer` + `Intl.DateTimeFormat().resolvedOptions().timeZone`.
+5. On "No": store choice; re-ask only if configured, after cooldown.
+6. If `Notification.permission==='denied'` or unsupported browser: never render.
+7. Bundle: vanilla TS compiled to ES2017 single file, < 15 KB gz, no globals except `window.PushVault`.
+
+**Install instructions generated per property:**
+```html
+<script src="https://cdn.pushvault.example/pushvault.js"
+        data-property-key="pk_live_xxx" defer></script>
+<!-- and upload pv-sw.js to https://clientdomain.com/pv-sw.js -->
+```
+
+---
+
+## 11. Dashboard (React) — screens for Phase 1–2
+
+1. **Login** · 2. **Properties list/create** (shows install snippet + SW file download, domain verification check: fetch `https://domain/pv-sw.js` and confirm 200) · 3. **Subscribers** (table + filters mirroring §6, growth chart, growth-by-campaign) · 4. **Segments** (visual filter builder → criteria json, live count button) · 5. **Campaign composer** (form + live notification preview, test-send, send-now/schedule) · 6. **Campaign report** (funnel: targeted→sent→clicked, CTR, errors) · 7. **Settings** (branding, frequency caps, API key, users).
+
+---
+
+## 12. Build milestones & acceptance criteria
+
+**M1 — Foundation (schema + auth + properties)**
+- Migrations create all §4 tables with RLS; seed script makes tenant+admin.
+- CRUD properties; install snippet text generated.
+- ✅ Accept: RLS test proves tenant A cannot read tenant B rows even with crafted query.
+
+**M2 — Capture (snippet + SW + subscribe API)**
+- Snippet + SW built and served from CDN path; subscribe endpoint live.
+- ✅ Accept: on a test site over HTTPS, soft prompt → Allow → subscriber row appears with correct UTMs, geo, device; page remains fully usable when clicking "No thanks"; second visit doesn't re-prompt.
+
+**M3 — Send engine**
+- Orchestrator + per-tenant queues + worker with 410 pruning, 429 backoff, frequency caps.
+- ✅ Accept: campaign to 10k synthetic subscribers completes; dead tokens marked expired; a second campaign same day skips capped subscribers; two tenants sending simultaneously both progress (fairness).
+
+**M4 — Dashboard v1**
+- Screens 1–6; test-send works; campaign report accurate against DB.
+- ✅ Accept: full flow demo — create property → install on demo store → subscribe → segment (date+campaign) → send → click lands on target URL → report shows the click.
+
+**M5 — Hardening**
+- Rate limits, audit log, erasure endpoint, monthly `sends` partitions, maintenance jobs (nightly expired-token sweep, segment count cache).
+- ✅ Accept: security checklist §9 all green; load test 100 subscribe req/s sustained.
+
+**Phase 2 backlog (post-M5):** scheduling/recurrence (rrule), client portal role, exit-intent trigger, growth-by-campaign analytics, WordPress/Shopify install guides.
+**Phase 3 backlog:** drip automations, A/B, revenue webhook/pixel, per-tenant VAPID, ClickHouse event store, self-serve billing.
+
+---
+
+## 13. Local dev quickstart (for the builder)
+
+```bash
+docker compose up -d postgres redis
+npx web-push generate-vapid-keys   # → .env
+pnpm install && pnpm prisma migrate dev && pnpm seed
+pnpm dev            # api :3000, dashboard :5173
+pnpm demo-site      # serves a test store on https://localhost:8443 (mkcert) with snippet installed
+```
+Include the `demo-site` in the repo — push requires HTTPS, so ship mkcert setup for local testing.
+
+---
+
+*End of developer build document. Sibling docs: PushVault Master Spec (product), Feature Matrix & Comparison.*

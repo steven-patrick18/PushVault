@@ -1,0 +1,20 @@
+{
+  "name": "pushvault",
+  "private": true,
+  "version": "0.1.0",
+  "description": "PushVault — multi-tenant web push notification platform",
+  "scripts": {
+    "dev:db": "node scripts/dev-db.mjs",
+    "dev:api": "pnpm --filter @pushvault/api start:dev",
+    "dev:dashboard": "pnpm --filter @pushvault/dashboard dev",
+    "migrate": "pnpm --filter @pushvault/api prisma:migrate",
+    "seed": "pnpm --filter @pushvault/api seed",
+    "test:rls": "pnpm --filter @pushvault/api test:rls"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "embedded-postgres": "18.4.0-beta.17"
+  }
+}
