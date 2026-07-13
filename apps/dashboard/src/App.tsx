@@ -4,6 +4,7 @@ import Layout from "./components/Layout";
 import Login from "./pages/Login";
 import Overview from "./pages/Overview";
 import Properties from "./pages/Properties";
+import Subscribers from "./pages/Subscribers";
 import Updates from "./pages/Updates";
 import Placeholder from "./pages/Placeholder";
 
@@ -25,10 +26,7 @@ export default function App() {
       >
         <Route index element={<Overview />} />
         <Route path="properties" element={<Properties />} />
-        <Route
-          path="subscribers"
-          element={<Placeholder title="Subscribers" milestone="M2 — Capture" />}
-        />
+        <Route path="subscribers" element={<Subscribers />} />
         <Route
           path="segments"
           element={<Placeholder title="Segments" milestone="M3 — Send engine" />}

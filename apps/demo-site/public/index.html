@@ -1,0 +1,48 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Northwind Gadgets — Demo Store</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; color: #222; background: #fafafa; }
+    header { background: #10213f; color: white; padding: 16px 32px; display: flex; justify-content: space-between; align-items: center; }
+    header .brand { font-size: 20px; font-weight: 800; }
+    header nav a { color: #cdd6ea; margin-left: 18px; font-size: 14px; text-decoration: none; }
+    .hero { background: linear-gradient(120deg, #10213f, #2b4a8b); color: white; padding: 60px 32px; text-align: center; }
+    .hero h1 { font-size: 34px; margin-bottom: 10px; }
+    .hero p { color: #b9c6e2; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 20px; padding: 32px; max-width: 1100px; margin: 0 auto; }
+    .product { background: white; border: 1px solid #e5e5ea; border-radius: 12px; overflow: hidden; }
+    .product .img { height: 140px; display: flex; align-items: center; justify-content: center; font-size: 54px; background: #f0f2f8; }
+    .product .info { padding: 14px 16px; }
+    .product h3 { font-size: 15px; margin-bottom: 4px; }
+    .product .price { color: #2b4a8b; font-weight: 700; }
+    .product button { margin-top: 10px; width: 100%; padding: 8px; border: none; border-radius: 8px; background: #10213f; color: white; font-weight: 600; cursor: pointer; }
+    footer { text-align: center; color: #999; padding: 30px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="brand">⚡ Northwind Gadgets</div>
+    <nav><a href="/">Home</a><a href="/?utm_source=google&utm_medium=cpc&utm_campaign=summer_sale">Simulate ad click</a></nav>
+  </header>
+  <div class="hero">
+    <h1>Big Summer Tech Sale</h1>
+    <p>This is the PushVault demo store. The soft opt-in prompt appears 5 seconds after page load.</p>
+  </div>
+  <div class="grid">
+    <div class="product"><div class="img">🎧</div><div class="info"><h3>NoiseFree Headphones</h3><div class="price">₹4,999</div><button>Add to cart</button></div></div>
+    <div class="product"><div class="img">⌚</div><div class="info"><h3>PulseFit Watch</h3><div class="price">₹7,499</div><button>Add to cart</button></div></div>
+    <div class="product"><div class="img">🔊</div><div class="info"><h3>BoomBox Mini</h3><div class="price">₹2,299</div><button>Add to cart</button></div></div>
+    <div class="product"><div class="img">📷</div><div class="info"><h3>SnapCam 4K</h3><div class="price">₹12,999</div><button>Add to cart</button></div></div>
+    <div class="product"><div class="img">🖱️</div><div class="info"><h3>GlideMouse Pro</h3><div class="price">₹1,499</div><button>Add to cart</button></div></div>
+    <div class="product"><div class="img">⌨️</div><div class="info"><h3>MechType 87</h3><div class="price">₹5,999</div><button>Add to cart</button></div></div>
+  </div>
+  <footer>Northwind Gadgets · PushVault demo property · key %PROPERTY_KEY%</footer>
+
+  <!-- PushVault install snippet -->
+  <script src="http://localhost:3000/cdn/pushvault.js" data-property-key="%PROPERTY_KEY%" defer></script>
+</body>
+</html>

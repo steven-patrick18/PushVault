@@ -1,0 +1,12 @@
+{
+  "name": "@pushvault/demo-site",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "node server.mjs"
+  },
+  "dependencies": {
+    "pg": "^8.22.0"
+  }
+}

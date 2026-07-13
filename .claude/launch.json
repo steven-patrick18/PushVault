@@ -12,6 +12,12 @@
       "runtimeExecutable": "pnpm",
       "runtimeArgs": ["--filter", "@pushvault/dashboard", "dev"],
       "port": 5173
+    },
+    {
+      "name": "demo-site",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["--filter", "@pushvault/demo-site", "dev"],
+      "port": 8080
     }
   ]
 }

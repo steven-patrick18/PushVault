@@ -7,6 +7,8 @@
     "dev:db": "node scripts/dev-db.mjs",
     "dev:api": "pnpm --filter @pushvault/api start:dev",
     "dev:dashboard": "pnpm --filter @pushvault/dashboard dev",
+    "dev:demo": "pnpm --filter @pushvault/demo-site dev",
+    "build:snippet": "pnpm --filter @pushvault/snippet build",
     "migrate": "pnpm --filter @pushvault/api prisma:migrate",
     "seed": "pnpm --filter @pushvault/api seed",
     "test:rls": "pnpm --filter @pushvault/api test:rls"

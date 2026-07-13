@@ -4,6 +4,8 @@ import { PrismaService } from "./infra/prisma.service";
 import { AuthModule } from "./modules/auth/auth.module";
 import { PropertiesModule } from "./modules/properties/properties.module";
 import { UpdatesModule } from "./modules/updates/updates.module";
+import { PublicModule } from "./modules/public/public.module";
+import { SubscribersController } from "./modules/subscribers/subscribers.controller";
 import { DashboardController } from "./modules/dashboard/dashboard.controller";
 import { Controller, Get } from "@nestjs/common";
 
@@ -26,8 +28,9 @@ class HealthController {
     AuthModule,
     PropertiesModule,
     UpdatesModule,
+    PublicModule,
   ],
-  controllers: [HealthController, DashboardController],
+  controllers: [HealthController, DashboardController, SubscribersController],
   providers: [PrismaService],
   exports: [PrismaService],
 })
