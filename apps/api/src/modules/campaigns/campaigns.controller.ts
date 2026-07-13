@@ -64,6 +64,10 @@ class CreateCampaignDto {
 
   @IsOptional()
   @IsString()
+  sourceDomain?: string;
+
+  @IsOptional()
+  @IsString()
   iconUrl?: string;
 
   @IsOptional()
@@ -112,6 +116,7 @@ class UpdateCampaignDto {
   @IsOptional() @IsArray() actions?: unknown[];
   @IsOptional() @IsArray() @IsString({ each: true }) callNumbers?: string[];
   @IsOptional() @IsIn(["round_robin", "random"]) callStrategy?: string;
+  @IsOptional() @ValidateIf((_, v) => v !== null) @IsString() sourceDomain?: string | null;
   @IsOptional() @IsArray() @IsUUID(undefined, { each: true }) segmentIds?: string[];
   @IsOptional() @IsIn(["mixed", "sequential", "zone"]) mixStrategy?: string;
   @IsOptional() @IsBoolean() targetAll?: boolean;
@@ -184,6 +189,7 @@ export class CampaignsController {
         clickUrl: dto.clickUrl,
         callNumbers: dto.callNumbers ?? [],
         callStrategy: dto.callStrategy ?? "round_robin",
+        sourceDomain: dto.sourceDomain ?? null,
         iconUrl: dto.iconUrl ?? null,
         imageUrl: dto.imageUrl ?? null,
         actions: (dto.actions as any) ?? undefined,

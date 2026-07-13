@@ -21,6 +21,7 @@ interface Campaign {
   clickUrl: string;
   callNumbers: string[];
   callStrategy: string;
+  sourceDomain: string | null;
   actions: CampaignAction[] | null;
   abConfig: { enabled: boolean; variantB?: { title?: string; body?: string } } | null;
   recurrence: { freq: string; interval?: number; byweekday?: number[] } | null;
@@ -298,7 +299,7 @@ export default function CampaignDetail() {
   const [audience, setAudience] = useState<number | null>(null);
   const [platform, setPlatform] = useState<Platform>("android");
   const [previewVariant, setPreviewVariant] = useState<"A" | "B">("A");
-  const [form, setForm] = useState({ name: "", title: "", body: "", clickUrl: "", iconUrl: "", imageUrl: "", scheduleAt: "" });
+  const [form, setForm] = useState({ name: "", title: "", body: "", clickUrl: "", iconUrl: "", imageUrl: "", scheduleAt: "", sourceDomain: "" });
   const [tapAction, setTapAction] = useState<"url" | "call">("url");
   const [callNumbers, setCallNumbers] = useState(""); // comma-separated
   const [callStrategy, setCallStrategy] = useState<"round_robin" | "random">("round_robin");
@@ -327,6 +328,7 @@ export default function CampaignDetail() {
       setForm({
         name: c.name, title: c.title, body: c.body, clickUrl: c.clickUrl,
         iconUrl: c.iconUrl ?? "", imageUrl: c.imageUrl ?? "", scheduleAt: "",
+        sourceDomain: c.sourceDomain ?? "",
       });
       setActions(
         (c.actions ?? []).map((a) => ({
@@ -447,6 +449,7 @@ export default function CampaignDetail() {
           name: form.name, title: form.title, body: form.body, clickUrl,
           callNumbers: nums,
           callStrategy,
+          sourceDomain: form.sourceDomain.trim() || null,
           // null (not undefined) so emptying a field actually clears it server-side
           iconUrl: form.iconUrl || null, imageUrl: form.imageUrl || null,
           actions: actionsPayload(),
@@ -543,6 +546,7 @@ export default function CampaignDetail() {
         title: form.title, body: form.body,
         clickUrl: nums.length ? `tel:${nums[0]}` : form.clickUrl,
         callNumbers: nums, callStrategy,
+        sourceDomain: form.sourceDomain.trim() || undefined,
         iconUrl: form.iconUrl || undefined, imageUrl: form.imageUrl || undefined,
         actions: actionsPayload(),
         segmentIds, mixStrategy, targetAll,
@@ -555,8 +559,9 @@ export default function CampaignDetail() {
 
   if (!campaign) return <div className="page-sub">{error || "Loading…"}</div>;
 
-  // real notifications show the PROPERTY domain (push subscription origin)
-  const domain = propDomain;
+  // preview source line: campaign override if set, else the property's real
+  // push origin (what the browser actually shows on a delivered notification)
+  const domain = form.sourceDomain.trim() || propDomain;
   const previewProps: PreviewProps = {
     title: (previewVariant === "B" && ab.enabled ? (ab.titleB || form.title) : form.title) || "Notification title",
     body: (previewVariant === "B" && ab.enabled ? (ab.bodyB || form.body) : form.body) || "Notification body",
@@ -821,7 +826,19 @@ export default function CampaignDetail() {
                     </div>
                   </div>
                 )}
-                <div style={{ display: "flex", gap: 8 }}>
+                <label>Source domain (shown as the notification sender)</label>
+                <input
+                  value={form.sourceDomain}
+                  placeholder={propDomain + "  (defaults to the property domain)"}
+                  onChange={(e) => setForm({ ...form, sourceDomain: e.target.value })}
+                />
+                <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 4 }}>
+                  Drives the preview's sender line. Note: on a delivered push the browser always
+                  shows the property's real push origin ({propDomain}) — this label can't override that
+                  (a browser security rule), but it lets you preview/brand as you like.
+                </div>
+
+                <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
                   <div style={{ flex: 1 }}>
                     <label>Icon URL</label>
                     <input value={form.iconUrl} placeholder="https://… (square, ≥192px)" onChange={(e) => setForm({ ...form, iconUrl: e.target.value })} />

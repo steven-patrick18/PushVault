@@ -227,6 +227,9 @@ model Campaign {
   // numbers (per-lead routing), overriding clickUrl
   callNumbers        String[]       @default([]) @map("call_numbers")
   callStrategy       String         @default("round_robin") @map("call_strategy")
+  // optional label shown in previews as the notification source; real pushes
+  // always display the property's push origin (browser-enforced)
+  sourceDomain       String?        @map("source_domain")
   actions            Json?
   segmentId          String?        @map("segment_id") @db.Uuid
   segmentIds         String[]       @default([]) @map("segment_ids") @db.Uuid
