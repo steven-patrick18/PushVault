@@ -74,6 +74,7 @@ model Tenant {
   campaigns   Campaign[]
   sends       Send[]
   auditLogs   AuditLog[]
+  automations Automation[]
 
   @@map("tenants")
 }
@@ -119,6 +120,8 @@ model Property {
   segments    Segment[]
   campaigns   Campaign[]
   pages       PagePath[]
+  automations Automation[]
+  conversions Conversion[]
 
   @@index([tenantId])
   @@map("properties")
@@ -172,9 +175,11 @@ model Subscriber {
   createdAt      DateTime         @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt      DateTime?        @updatedAt @map("updated_at") @db.Timestamptz()
 
-  tenant   Tenant   @relation(fields: [tenantId], references: [id])
-  property Property @relation(fields: [propertyId], references: [id])
-  sends    Send[]
+  tenant         Tenant          @relation(fields: [tenantId], references: [id])
+  property       Property        @relation(fields: [propertyId], references: [id])
+  sends          Send[]
+  automationJobs AutomationJob[]
+  conversions    Conversion[]
 
   @@unique([propertyId, endpoint])
   @@index([propertyId, status])
@@ -244,8 +249,10 @@ model Campaign {
 model Send {
   id           String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   tenantId     String     @map("tenant_id") @db.Uuid
-  campaignId   String     @map("campaign_id") @db.Uuid
+  campaignId   String?    @map("campaign_id") @db.Uuid
+  automationId String?    @map("automation_id") @db.Uuid
   subscriberId String     @map("subscriber_id") @db.Uuid
+  variant      String? // A/B test arm
   status       SendStatus @default(queued)
   clicked      Boolean    @default(false)
   errorCode    String?    @map("error_code")
@@ -253,12 +260,73 @@ model Send {
   clickedAt    DateTime?  @map("clicked_at") @db.Timestamptz()
   createdAt    DateTime   @default(now()) @map("created_at") @db.Timestamptz()
 
-  tenant     Tenant     @relation(fields: [tenantId], references: [id])
-  campaign   Campaign   @relation(fields: [campaignId], references: [id])
-  subscriber Subscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+  tenant     Tenant      @relation(fields: [tenantId], references: [id])
+  campaign   Campaign?   @relation(fields: [campaignId], references: [id])
+  automation Automation? @relation(fields: [automationId], references: [id])
+  subscriber Subscriber  @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
 
   @@index([campaignId, status])
   @@map("sends")
+}
+
+// drip sequences triggered by events (v1: on subscribe)
+model Automation {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId   String    @map("tenant_id") @db.Uuid
+  propertyId String    @map("property_id") @db.Uuid
+  name       String
+  trigger    String    @default("subscribe")
+  status     String    @default("active") // active | paused
+  steps      Json // [{delay_minutes, title, body, click_url, icon_url}]
+  createdAt  DateTime  @default(now()) @map("created_at") @db.Timestamptz()
+  updatedAt  DateTime? @updatedAt @map("updated_at") @db.Timestamptz()
+
+  tenant   Tenant          @relation(fields: [tenantId], references: [id])
+  property Property        @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  jobs     AutomationJob[]
+  sends    Send[]
+
+  @@index([propertyId, status])
+  @@map("automations")
+}
+
+model AutomationJob {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  automationId String   @map("automation_id") @db.Uuid
+  subscriberId String   @map("subscriber_id") @db.Uuid
+  stepIndex    Int      @map("step_index")
+  dueAt        DateTime @map("due_at") @db.Timestamptz()
+  status       String   @default("queued") // queued | sent | failed | cancelled
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  automation Automation @relation(fields: [automationId], references: [id], onDelete: Cascade)
+  subscriber Subscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
+
+  @@index([status, dueAt])
+  @@map("automation_jobs")
+}
+
+// revenue attribution: conversions reported by pixel or webhook
+model Conversion {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  tenantId     String   @map("tenant_id") @db.Uuid
+  propertyId   String   @map("property_id") @db.Uuid
+  subscriberId String?  @map("subscriber_id") @db.Uuid
+  sendId       String?  @map("send_id") @db.Uuid
+  campaignId   String?  @map("campaign_id") @db.Uuid
+  orderId      String?  @map("order_id")
+  amount       Decimal  @db.Decimal(12, 2)
+  currency     String   @default("INR")
+  source       String   @default("pixel") // pixel | webhook
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz()
+
+  property   Property    @relation(fields: [propertyId], references: [id], onDelete: Cascade)
+  subscriber Subscriber? @relation(fields: [subscriberId], references: [id], onDelete: SetNull)
+
+  @@index([propertyId, createdAt])
+  @@index([campaignId])
+  @@map("conversions")
 }
 
 model AuditLog {

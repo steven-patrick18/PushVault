@@ -3,8 +3,9 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { PrismaService } from "../../infra/prisma.service";
-import { generateKey, hashSecret } from "../../common/crypto";
+import { generateKey, hashApiKey } from "../../common/crypto";
 import { AuthUser } from "../../common/auth.guard";
+import * as webpush from "web-push";
 
 const DEFAULT_PROMPT_CONFIG = {
   trigger: { type: "delay", seconds: 12 },
@@ -28,6 +29,7 @@ export class PropertiesService {
 
   async list(user: AuthUser) {
     const properties = await this.db(user).property.findMany({
+      where: user.role === "client" ? { id: { in: user.propertyIds } } : undefined,
       orderBy: { createdAt: "asc" },
     });
     return properties.map((p) => this.serialize(p));
@@ -50,7 +52,7 @@ export class PropertiesService {
         iconUrl: data.iconUrl ?? null,
         propertyKey,
         promptConfig: DEFAULT_PROMPT_CONFIG,
-        apiKeyHash: hashSecret(apiKey),
+        apiKeyHash: hashApiKey(apiKey),
       },
     });
     await this.audit(user, "property.create", property.id, null, { name: data.name });
@@ -90,10 +92,27 @@ export class PropertiesService {
     const apiKey = generateKey("sk_live");
     await this.db(user).property.update({
       where: { id },
-      data: { apiKeyHash: hashSecret(apiKey) },
+      data: { apiKeyHash: hashApiKey(apiKey) },
     });
     await this.audit(user, "property.rotate_api_key", id, null, null);
     return { apiKey }; // shown once
+  }
+
+  /**
+   * Dedicated VAPID keys for this property (Phase 3 white-label). WARNING:
+   * existing subscribers are bound to the previous key pair — generate this
+   * BEFORE collecting subscribers, or accept re-subscription of the old base.
+   */
+  async generateVapid(user: AuthUser, id: string) {
+    const property = await this.db(user).property.findUnique({ where: { id } });
+    if (!property) throw new NotFoundException("Property not found");
+    const keys = webpush.generateVAPIDKeys();
+    await this.db(user).property.update({
+      where: { id },
+      data: { vapidPublic: keys.publicKey, vapidPrivate: keys.privateKey },
+    });
+    await this.audit(user, "property.generate_vapid", id, null, null);
+    return { vapidPublic: keys.publicKey };
   }
 
   /**

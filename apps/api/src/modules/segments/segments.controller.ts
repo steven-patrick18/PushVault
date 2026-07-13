@@ -13,7 +13,7 @@ import {
 } from "@nestjs/common";
 import { IsBoolean, IsObject, IsOptional, IsString, IsUUID, MinLength } from "class-validator";
 import { PrismaService } from "../../infra/prisma.service";
-import { AuthUser, CurrentUser, JwtAuthGuard } from "../../common/auth.guard";
+import { AuthUser, CurrentUser, JwtAuthGuard, propertyScope } from "../../common/auth.guard";
 import { compileCriteria, SegmentCriteria } from "./segment-compiler";
 
 class CreateSegmentDto {
@@ -55,7 +55,7 @@ export class SegmentsController {
   @Get()
   list(@CurrentUser() user: AuthUser, @Query("property_id") propertyId?: string) {
     return this.db(user).segment.findMany({
-      where: propertyId ? { propertyId } : undefined,
+      where: { ...propertyScope(user), ...(propertyId ? { propertyId } : {}) },
       orderBy: { createdAt: "desc" },
     });
   }

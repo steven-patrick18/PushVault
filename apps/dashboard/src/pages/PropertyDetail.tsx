@@ -54,6 +54,7 @@ export default function PropertyDetail() {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
+  const [guide, setGuide] = useState<"html" | "wordpress" | "shopify">("html");
 
   const load = useCallback(() => {
     api<Property>(`/properties/${id}`).then((p) => {
@@ -156,11 +157,75 @@ export default function PropertyDetail() {
         </div>
         <label>Property key (identifies this site to PushVault)</label>
         <div className="code-block">{property.propertyKey}</div>
-        <label>Step 1 — add the snippet to every page (before &lt;/body&gt;)</label>
-        <div className="code-block">{property.install?.script}</div>
-        <label>Step 2 — upload the key file to the website ROOT folder</label>
+
+        <div style={{ display: "flex", gap: 6, margin: "14px 0 4px" }}>
+          {(["html", "wordpress", "shopify"] as const).map((g) => (
+            <button key={g} className={"btn small " + (guide === g ? "" : "secondary")} onClick={() => setGuide(g)}>
+              {g === "html" ? "🌐 Any website" : g === "wordpress" ? "🅦 WordPress" : "🛍 Shopify"}
+            </button>
+          ))}
+        </div>
+
+        {guide === "html" && (
+          <>
+            <label>Step 1 — add the snippet to every page (before &lt;/body&gt;)</label>
+            <div className="code-block">{property.install?.script}</div>
+            <label>Step 2 — upload the key file to the website ROOT folder</label>
+            <div className="code-block">
+              {`Download: http://localhost:3000/cdn/pv-sw.js\nUpload to: https://${property.domains[0]}/pv-sw.js  (must be at the root)`}
+            </div>
+          </>
+        )}
+        {guide === "wordpress" && (
+          <>
+            <label>Step 1 — add the snippet via your theme (Appearance → Theme File Editor → footer.php, before &lt;/body&gt;) or a header/footer plugin like WPCode</label>
+            <div className="code-block">{property.install?.script}</div>
+            <label>Step 2 — upload pv-sw.js to the WordPress ROOT folder (where wp-config.php lives), via FTP or your host's file manager</label>
+            <div className="code-block">
+              {`Download: http://localhost:3000/cdn/pv-sw.js\nUpload to: /public_html/pv-sw.js  →  https://${property.domains[0]}/pv-sw.js`}
+            </div>
+            <div className="page-sub" style={{ marginBottom: 0 }}>
+              Tip: some caching plugins (WP Rocket, LiteSpeed) exclude .js at root by default — no changes needed. If using Cloudflare, keep pv-sw.js cache TTL short.
+            </div>
+          </>
+        )}
+        {guide === "shopify" && (
+          <>
+            <label>Step 1 — Online Store → Themes → Edit code → layout/theme.liquid, paste before &lt;/body&gt;</label>
+            <div className="code-block">{property.install?.script}</div>
+            <label>Step 2 — Shopify cannot serve files at the domain root, so upload pv-sw.js via an app proxy or use Settings → Files + a redirect. Easiest supported route:</label>
+            <div className="code-block">
+              {`1. Settings → Apps → develop a tiny app proxy that serves /pv-sw.js, OR\n2. host pv-sw.js on your primary domain via your DNS provider's worker\n   (Cloudflare Worker route: ${property.domains[0]}/pv-sw.js)`}
+            </div>
+            <div className="page-sub" style={{ marginBottom: 0 }}>
+              Note: web push requires the service worker on the SAME domain visitors browse. Shopify's asset CDN (cdn.shopify.com) does not qualify.
+            </div>
+          </>
+        )}
+
+        <label>Revenue tracking (optional) — call after a completed order</label>
         <div className="code-block">
-          {`Download: http://localhost:3000/cdn/pv-sw.js\nUpload to: https://${property.domains[0]}/pv-sw.js  (must be at the root)`}
+          {`window.PushVault.trackConversion({ amount: 1499, order_id: "ORD-1234", currency: "INR" });\n// or server-side: POST /api/v1/webhooks/conversion with X-Api-Key`}
+        </div>
+
+        <label>Push identity (VAPID)</label>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <span className={"badge " + ((property as any).vapidPublic ? "green" : "gray")}>
+            {(property as any).vapidPublic ? "dedicated keys" : "platform shared keys"}
+          </span>
+          {!(property as any).vapidPublic && (
+            <button
+              className="btn secondary small"
+              onClick={async () => {
+                if (!confirm("Generate dedicated VAPID keys? Do this BEFORE collecting subscribers — existing subscribers would stop receiving pushes.")) return;
+                await api(`/properties/${id}/generate-vapid`, { method: "POST" });
+                setMsg("Dedicated VAPID keys generated");
+                load();
+              }}
+            >
+              Generate dedicated keys
+            </button>
+          )}
         </div>
         {property.verification && (
           <>

@@ -34,6 +34,7 @@ export class AuthService {
       tenantId: user.tenantId,
       role: user.role,
       email: user.email,
+      propertyIds: user.propertyIds ?? [],
     });
 
     return {
@@ -44,6 +45,7 @@ export class AuthService {
         role: user.role,
         tenantId: user.tenantId,
         tenantName: tenant?.brandName ?? tenant?.name ?? "PushVault",
+        propertyIds: user.propertyIds ?? [],
       },
     };
   }

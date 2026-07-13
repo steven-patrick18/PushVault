@@ -7,12 +7,17 @@ const NAV = [
   { to: "/subscribers", label: "Subscribers", icon: "👥" },
   { to: "/segments", label: "Segments", icon: "🎯" },
   { to: "/campaigns", label: "Campaigns", icon: "📣" },
+  { to: "/automations", label: "Automations", icon: "🔁" },
   { to: "/updates", label: "Updates", icon: "⬇" },
   { to: "/settings", label: "Settings", icon: "⚙" },
 ];
 
+// client-role users get a read-only portal with a reduced menu
+const CLIENT_NAV = ["/", "/subscribers", "/campaigns", "/automations"];
+
 export default function Layout() {
   const user = getUser();
+  const nav = user?.role === "client" ? NAV.filter((n) => CLIENT_NAV.includes(n.to)) : NAV;
   const navigate = useNavigate();
 
   return (
@@ -21,7 +26,7 @@ export default function Layout() {
         <div className="logo">
           Push<span>Vault</span>
         </div>
-        {NAV.map((item) => (
+        {nav.map((item) => (
           <NavLink
             key={item.to}
             to={item.to}

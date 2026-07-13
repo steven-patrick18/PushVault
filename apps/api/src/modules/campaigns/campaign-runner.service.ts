@@ -1,13 +1,20 @@
-import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
+import { BadRequestException, Injectable, Logger, OnModuleInit } from "@nestjs/common";
 import { randomUUID } from "node:crypto";
 import { PrismaService, TenantClient } from "../../infra/prisma.service";
 import { RateLimiter, TaskPool, sleep } from "../../queue/task-pool";
-import { PushError, PushService } from "./push.service";
+import { PushError, PushService, VapidOverride } from "./push.service";
 import { compileCriteria, SegmentCriteria } from "../segments/segment-compiler";
+import { isRecurrence, nextOccurrence } from "./recurrence";
+import { PLAN_QUOTAS, monthStart } from "../../common/plans";
 
 const BATCH_SIZE = 1000;
 const TENANT_CONCURRENCY = 25;
 const MAX_RETRIES = 3;
+
+interface AbConfig {
+  enabled: boolean;
+  variantB?: { title?: string; body?: string };
+}
 
 /**
  * The send engine (§7). In-process implementation of the orchestrator +
@@ -20,6 +27,7 @@ export class CampaignRunnerService implements OnModuleInit {
   private readonly tenantPools = new Map<string, TaskPool>();
   private readonly scheduledTimers = new Map<string, NodeJS.Timeout>();
   private readonly remaining = new Map<string, number>();
+  private consumedMap = new Map<string, number>();
 
   constructor(
     private readonly prisma: PrismaService,
@@ -51,7 +59,7 @@ export class CampaignRunnerService implements OnModuleInit {
     const delay = Math.max(at.getTime() - Date.now(), 0);
     const timer = setTimeout(() => {
       this.scheduledTimers.delete(campaignId);
-      void this.dispatch(campaignId).catch((e) =>
+      void this.fireScheduled(campaignId).catch((e) =>
         this.logger.error(`Scheduled dispatch failed for ${campaignId}: ${e.message}`),
       );
     }, delay);
@@ -66,6 +74,67 @@ export class CampaignRunnerService implements OnModuleInit {
     }
   }
 
+  /**
+   * A scheduled campaign fired. One-shot campaigns dispatch directly;
+   * recurring campaigns dispatch a cloned occurrence and re-arm the parent
+   * for the next occurrence.
+   */
+  async fireScheduled(campaignId: string): Promise<void> {
+    const campaign = await this.prisma.system.campaign.findUnique({ where: { id: campaignId } });
+    if (!campaign || campaign.status !== "scheduled") return;
+
+    const rec = campaign.recurrence as unknown;
+    if (!isRecurrence(rec)) {
+      await this.dispatch(campaignId);
+      return;
+    }
+
+    const db = this.prisma.forTenant(campaign.tenantId);
+    const occurrence = await db.campaign.create({
+      data: {
+        tenantId: campaign.tenantId,
+        propertyId: campaign.propertyId,
+        name: `${campaign.name} — ${new Date().toLocaleDateString("en-GB")}`,
+        title: campaign.title,
+        body: campaign.body,
+        iconUrl: campaign.iconUrl,
+        imageUrl: campaign.imageUrl,
+        clickUrl: campaign.clickUrl,
+        actions: campaign.actions as any,
+        segmentId: campaign.segmentId,
+        abConfig: campaign.abConfig as any,
+        pacingPerMinute: campaign.pacingPerMinute,
+        status: "draft",
+      },
+    });
+    this.logger.log(`Recurring campaign ${campaign.id} → occurrence ${occurrence.id}`);
+    void this.dispatch(occurrence.id).catch((e) =>
+      this.logger.error(`Occurrence dispatch failed: ${e.message}`),
+    );
+
+    const next = nextOccurrence(campaign.scheduleAt ?? new Date(), rec);
+    await db.campaign.update({
+      where: { id: campaign.id },
+      data: { scheduleAt: next },
+    });
+    this.armSchedule(campaign.id, next);
+    this.logger.log(`Recurring campaign ${campaign.id} re-armed for ${next.toISOString()}`);
+  }
+
+  /** Monthly plan quota remaining for a tenant (null = unlimited). */
+  async quotaRemaining(tenantId: string): Promise<number | null> {
+    const tenant = await this.prisma.system.tenant.findUnique({
+      where: { id: tenantId },
+      select: { plan: true },
+    });
+    const quota = PLAN_QUOTAS[tenant?.plan ?? "internal"] ?? null;
+    if (quota === null) return null;
+    const used = await this.prisma.system.send.count({
+      where: { tenantId, createdAt: { gte: monthStart() } },
+    });
+    return Math.max(0, quota - used);
+  }
+
   /** Orchestrator: `campaign:dispatch` */
   async dispatch(campaignId: string): Promise<void> {
     const campaign = await this.prisma.system.campaign.findUnique({
@@ -75,6 +144,12 @@ export class CampaignRunnerService implements OnModuleInit {
     if (!campaign) throw new Error("Campaign not found");
     if (!["draft", "scheduled"].includes(campaign.status)) {
       throw new Error(`Campaign is ${campaign.status}, cannot dispatch`);
+    }
+
+    // plan quota enforcement (Phase 3 billing)
+    let remainingQuota = await this.quotaRemaining(campaign.tenantId);
+    if (remainingQuota !== null && remainingQuota <= 0) {
+      throw new BadRequestException("Monthly push quota exhausted — upgrade the plan in Settings");
     }
 
     const db = this.prisma.forTenant(campaign.tenantId);
@@ -93,6 +168,9 @@ export class CampaignRunnerService implements OnModuleInit {
     const segmentWhere = campaign.segment
       ? compileCriteria(campaign.segment.criteria as SegmentCriteria)
       : {};
+
+    const abRaw = campaign.abConfig as unknown as AbConfig | null;
+    const ab = abRaw?.enabled ? abRaw : null;
     const basePayload = {
       title: campaign.title,
       body: campaign.body,
@@ -101,8 +179,19 @@ export class CampaignRunnerService implements OnModuleInit {
       url: campaign.clickUrl,
       actions: (campaign.actions as any) ?? undefined,
     };
+    const variantBPayload = ab
+      ? {
+          ...basePayload,
+          title: ab.variantB?.title || campaign.title,
+          body: ab.variantB?.body || campaign.body,
+        }
+      : null;
 
-    // pacing: spread sends evenly instead of blasting at full speed
+    const vapid: VapidOverride | null =
+      campaign.property.vapidPublic && campaign.property.vapidPrivate
+        ? { publicKey: campaign.property.vapidPublic, privateKey: campaign.property.vapidPrivate }
+        : null;
+
     const limiter = campaign.pacingPerMinute
       ? new RateLimiter(60_000 / campaign.pacingPerMinute)
       : null;
@@ -114,6 +203,7 @@ export class CampaignRunnerService implements OnModuleInit {
 
     let cursor: string | undefined;
     let targeted = 0;
+    let quotaHit = false;
     this.remaining.set(campaign.id, Number.MAX_SAFE_INTEGER); // sentinel while streaming
 
     for (;;) {
@@ -127,7 +217,7 @@ export class CampaignRunnerService implements OnModuleInit {
       if (batch.length === 0) break;
       cursor = batch[batch.length - 1].id;
 
-      // Frequency caps (server-side, §7 step 3): sends in the last 24h / 7d
+      // frequency caps (server-side, §7 step 3)
       const ids = batch.map((s) => s.id);
       const [dayCounts, weekCounts] = await Promise.all([
         db.send.groupBy({
@@ -143,26 +233,36 @@ export class CampaignRunnerService implements OnModuleInit {
       ]);
       const dayMap = new Map(dayCounts.map((c) => [c.subscriberId, c._count.subscriberId]));
       const weekMap = new Map(weekCounts.map((c) => [c.subscriberId, c._count.subscriberId]));
-      const eligible = batch.filter(
+      let eligible = batch.filter(
         (s) => (dayMap.get(s.id) ?? 0) < capDay && (weekMap.get(s.id) ?? 0) < capWeek,
       );
       if (eligible.length === 0) continue;
 
-      // Insert sends (queued) with client-generated ids, then enqueue jobs
-      const sendRows = eligible.map((s) => ({
+      // plan quota cap
+      if (remainingQuota !== null) {
+        if (remainingQuota <= 0) { quotaHit = true; break; }
+        if (eligible.length > remainingQuota) {
+          eligible = eligible.slice(0, remainingQuota);
+          quotaHit = true;
+        }
+        remainingQuota -= eligible.length;
+      }
+
+      const sendRows = eligible.map((s, i) => ({
         id: randomUUID(),
         tenantId: campaign.tenantId,
         campaignId: campaign.id,
         subscriberId: s.id,
         status: "queued" as const,
+        variant: ab ? ((targeted + i) % 2 === 0 ? "A" : "B") : null,
       }));
       await db.send.createMany({ data: sendRows });
-      targeted += sendRows.length;
 
       const pool = this.pool(campaign.tenantId);
       for (let i = 0; i < sendRows.length; i++) {
         const send = sendRows[i];
         const sub = eligible[i];
+        const payload = send.variant === "B" && variantBPayload ? variantBPayload : basePayload;
         pool.add(() =>
           this.processSend(
             db,
@@ -170,11 +270,14 @@ export class CampaignRunnerService implements OnModuleInit {
             campaign.tenantId,
             send.id,
             sub,
-            { ...basePayload, send_id: send.id },
+            { ...payload, send_id: send.id },
             limiter,
+            vapid,
           ),
         );
       }
+      targeted += sendRows.length;
+      if (quotaHit) break;
     }
 
     await db.campaign.update({
@@ -185,12 +288,11 @@ export class CampaignRunnerService implements OnModuleInit {
     if ((this.remaining.get(campaign.id) ?? 0) <= 0) {
       await this.finalize(campaign.id, campaign.tenantId);
     }
-    this.logger.log(`Campaign ${campaign.id}: targeted ${targeted}`);
+    this.logger.log(
+      `Campaign ${campaign.id}: targeted ${targeted}${quotaHit ? " (capped by plan quota)" : ""}`,
+    );
   }
 
-  // completion bookkeeping: processSend decrements via done(); while the
-  // orchestrator is still streaming, decrements accumulate in `consumedMap`
-  private consumedMap = new Map<string, number>();
   private consumed(campaignId: string) {
     return this.consumedMap.get(campaignId) ?? 0;
   }
@@ -242,6 +344,7 @@ export class CampaignRunnerService implements OnModuleInit {
     sub: { id: string; endpoint: string; p256dh: string; auth: string },
     payload: any,
     limiter: RateLimiter | null = null,
+    vapid: VapidOverride | null = null,
   ): Promise<void> {
     try {
       if (limiter) await limiter.wait();
@@ -249,7 +352,7 @@ export class CampaignRunnerService implements OnModuleInit {
       for (;;) {
         attempt++;
         try {
-          await this.push.send(sub, payload);
+          await this.push.send(sub, payload, vapid);
           break;
         } catch (e) {
           if (e instanceof PushError && e.statusCode === 429 && attempt < MAX_RETRIES) {

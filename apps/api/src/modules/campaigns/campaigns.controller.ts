@@ -15,6 +15,7 @@ import {
   IsArray,
   IsDateString,
   IsInt,
+  IsObject,
   IsOptional,
   IsString,
   IsUUID,
@@ -24,9 +25,10 @@ import {
 } from "class-validator";
 import { randomUUID } from "node:crypto";
 import { PrismaService } from "../../infra/prisma.service";
-import { AuthUser, CurrentUser, JwtAuthGuard } from "../../common/auth.guard";
+import { AuthUser, CurrentUser, JwtAuthGuard, propertyScope } from "../../common/auth.guard";
 import { CampaignRunnerService } from "./campaign-runner.service";
 import { PushService, PushError } from "./push.service";
+import { describeRecurrence, isRecurrence } from "./recurrence";
 
 class CreateCampaignDto {
   @IsUUID()
@@ -67,6 +69,10 @@ class CreateCampaignDto {
   @IsInt()
   @Min(1)
   pacingPerMinute?: number;
+
+  @IsOptional()
+  @IsObject()
+  abConfig?: { enabled: boolean; variantB?: { title?: string; body?: string } };
 }
 
 class UpdateCampaignDto {
@@ -81,11 +87,19 @@ class UpdateCampaignDto {
   @IsOptional() @ValidateIf((_, v) => v !== null) @IsUUID() segmentId?: string | null;
   // null = full speed
   @IsOptional() @ValidateIf((_, v) => v !== null) @IsInt() @Min(1) pacingPerMinute?: number | null;
+  // null = disable A/B
+  @IsOptional() @ValidateIf((_, v) => v !== null) @IsObject() abConfig?: object | null;
 }
 
 class ScheduleDto {
   @IsDateString()
   schedule_at: string;
+
+  // {freq: DAILY|WEEKLY|MONTHLY, interval?, byweekday?: number[]} — omit for one-shot
+  @IsOptional()
+  @ValidateIf((_, v) => v !== null)
+  @IsObject()
+  recurrence?: { freq: string; interval?: number; byweekday?: number[] } | null;
 }
 
 class TestSendDto {
@@ -109,7 +123,7 @@ export class CampaignsController {
   @Get()
   list(@CurrentUser() user: AuthUser, @Query("property_id") propertyId?: string) {
     return this.db(user).campaign.findMany({
-      where: propertyId ? { propertyId } : undefined,
+      where: { ...propertyScope(user), ...(propertyId ? { propertyId } : {}) },
       orderBy: { createdAt: "desc" },
       include: { segment: { select: { id: true, name: true } } },
     });
@@ -140,6 +154,7 @@ export class CampaignsController {
         actions: (dto.actions as any) ?? undefined,
         segmentId: dto.segmentId ?? null,
         pacingPerMinute: dto.pacingPerMinute ?? null,
+        abConfig: (dto.abConfig as any) ?? undefined,
       },
     });
     await this.audit(user, "campaign.create", campaign.id);
@@ -178,6 +193,9 @@ export class CampaignsController {
   ) {
     const at = new Date(dto.schedule_at);
     if (at.getTime() < Date.now()) throw new BadRequestException("schedule_at is in the past");
+    if (dto.recurrence && !isRecurrence(dto.recurrence)) {
+      throw new BadRequestException("recurrence.freq must be DAILY, WEEKLY or MONTHLY");
+    }
     const campaign = await this.db(user).campaign.findUnique({ where: { id } });
     if (!campaign) throw new NotFoundException("Campaign not found");
     if (!["draft", "scheduled"].includes(campaign.status)) {
@@ -185,11 +203,19 @@ export class CampaignsController {
     }
     await this.db(user).campaign.update({
       where: { id },
-      data: { status: "scheduled", scheduleAt: at },
+      data: {
+        status: "scheduled",
+        scheduleAt: at,
+        recurrence: (dto.recurrence as any) ?? null,
+      },
     });
     this.runner.armSchedule(id, at);
     await this.audit(user, "campaign.schedule", id);
-    return { ok: true, schedule_at: at.toISOString() };
+    return {
+      ok: true,
+      schedule_at: at.toISOString(),
+      recurrence: dto.recurrence ? describeRecurrence(dto.recurrence as any) : null,
+    };
   }
 
   @Post(":id/cancel")
@@ -269,18 +295,46 @@ export class CampaignsController {
     });
     if (!campaign) throw new NotFoundException("Campaign not found");
 
-    const [statusCounts, errorCounts, clicked] = await Promise.all([
-      db.send.groupBy({ by: ["status"], where: { campaignId: id }, _count: { status: true } }),
-      db.send.groupBy({
-        by: ["errorCode"],
-        where: { campaignId: id, errorCode: { not: null } },
-        _count: { errorCode: true },
-      }),
-      db.send.count({ where: { campaignId: id, clicked: true } }),
-    ]);
+    const [statusCounts, errorCounts, clicked, variantSent, variantClicked, revenue] =
+      await Promise.all([
+        db.send.groupBy({ by: ["status"], where: { campaignId: id }, _count: { status: true } }),
+        db.send.groupBy({
+          by: ["errorCode"],
+          where: { campaignId: id, errorCode: { not: null } },
+          _count: { errorCode: true },
+        }),
+        db.send.count({ where: { campaignId: id, clicked: true } }),
+        db.send.groupBy({
+          by: ["variant"],
+          where: { campaignId: id, variant: { not: null }, status: "sent" },
+          _count: { variant: true },
+        }),
+        db.send.groupBy({
+          by: ["variant"],
+          where: { campaignId: id, variant: { not: null }, clicked: true },
+          _count: { variant: true },
+        }),
+        db.conversion.aggregate({
+          where: { campaignId: id },
+          _sum: { amount: true },
+          _count: { _all: true },
+        }),
+      ]);
 
     const statuses = Object.fromEntries(statusCounts.map((c) => [c.status, c._count.status]));
     const sent = statuses.sent ?? 0;
+
+    const clicksByVariant = new Map(variantClicked.map((v) => [v.variant, v._count.variant]));
+    const variants = variantSent.map((v) => {
+      const vClicked = clicksByVariant.get(v.variant) ?? 0;
+      return {
+        variant: v.variant,
+        sent: v._count.variant,
+        clicked: vClicked,
+        ctr: v._count.variant > 0 ? +((vClicked / v._count.variant) * 100).toFixed(2) : 0,
+      };
+    }).sort((a, b) => (a.variant! < b.variant! ? -1 : 1));
+
     return {
       campaign,
       funnel: {
@@ -294,6 +348,11 @@ export class CampaignsController {
       },
       ctr: sent > 0 ? +((clicked / sent) * 100).toFixed(2) : null,
       errors: errorCounts.map((e) => ({ code: e.errorCode, count: e._count.errorCode })),
+      variants: variants.length > 0 ? variants : null,
+      revenue: {
+        conversions: revenue._count._all,
+        amount: Number(revenue._sum.amount ?? 0),
+      },
     };
   }
 

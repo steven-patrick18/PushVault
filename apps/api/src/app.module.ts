@@ -7,6 +7,7 @@ import { PropertiesModule } from "./modules/properties/properties.module";
 import { UpdatesModule } from "./modules/updates/updates.module";
 import { PublicModule } from "./modules/public/public.module";
 import { CampaignsModule } from "./modules/campaigns/campaigns.module";
+import { AutomationsModule } from "./modules/automations/automations.module";
 import { SubscribersController } from "./modules/subscribers/subscribers.controller";
 import { SettingsController } from "./modules/settings/settings.controller";
 import { DashboardController } from "./modules/dashboard/dashboard.controller";
@@ -33,6 +34,7 @@ class HealthController {
     UpdatesModule,
     PublicModule,
     CampaignsModule,
+    AutomationsModule,
   ],
   controllers: [
     HealthController,

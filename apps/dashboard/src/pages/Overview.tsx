@@ -5,6 +5,8 @@ interface OverviewData {
   properties: number;
   activeSubscribers: number;
   newSubscribers30d: number;
+  revenue30d: number;
+  conversions30d: number;
   recentCampaigns: {
     id: string;
     name: string;
@@ -87,6 +89,11 @@ export default function Overview() {
           <div className="label">New (30 days)</div>
           <div className="value">{data?.newSubscribers30d ?? "–"}</div>
           <div className="hint">subscriber growth</div>
+        </div>
+        <div className="card">
+          <div className="label">Revenue (30 days)</div>
+          <div className="value">₹{(data?.revenue30d ?? 0).toLocaleString()}</div>
+          <div className="hint">{data?.conversions30d ?? 0} attributed conversions</div>
         </div>
       </div>
 

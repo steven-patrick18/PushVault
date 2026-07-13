@@ -103,6 +103,11 @@ export class PropertiesController {
     return this.properties.verify(user, id);
   }
 
+  @Post(":id/generate-vapid")
+  generateVapid(@CurrentUser() user: AuthUser, @Param("id", ParseUUIDPipe) id: string) {
+    return this.properties.generateVapid(user, id);
+  }
+
   @Get(":id/pages")
   pages(@CurrentUser() user: AuthUser, @Param("id", ParseUUIDPipe) id: string) {
     return this.properties.pages(user, id);

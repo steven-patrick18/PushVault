@@ -263,6 +263,28 @@ interface RemoteConfig {
     }
   }
 
+  // revenue attribution: notification clicks land with ?pv_sid=<send_id>;
+  // remember it for 30 days so trackConversion can attribute the sale
+  const LS_ATTRIB = "pv_attrib_" + propertyKey;
+  try {
+    const sid = new URLSearchParams(location.search).get("pv_sid");
+    if (sid) localStorage.setItem(LS_ATTRIB, JSON.stringify({ sid, ts: Date.now() }));
+  } catch {
+    /* ignore */
+  }
+
+  function getAttribution(): string | undefined {
+    try {
+      const raw = localStorage.getItem(LS_ATTRIB);
+      if (!raw) return undefined;
+      const { sid, ts } = JSON.parse(raw);
+      if (Date.now() - ts > 30 * 86400_000) return undefined;
+      return sid;
+    } catch {
+      return undefined;
+    }
+  }
+
   function beaconPageview() {
     try {
       void fetch(API + "/event/pageview", {
@@ -306,6 +328,26 @@ interface RemoteConfig {
     subscribe: async () => {
       const cfg = await fetchConfig();
       return cfg ? doSubscribe(cfg.vapid_public_key) : false;
+    },
+    /** Revenue pixel: PushVault.trackConversion({amount: 499, order_id: "1234", currency: "INR"}) */
+    trackConversion: async (opts: { amount: number; order_id?: string; currency?: string }) => {
+      try {
+        const res = await fetch(API + "/event/conversion", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            property_key: propertyKey,
+            amount: opts.amount,
+            order_id: opts.order_id,
+            currency: opts.currency,
+            send_id: getAttribution(),
+          }),
+          keepalive: true,
+        });
+        return res.ok;
+      } catch {
+        return false;
+      }
     },
     unsubscribe: async () => {
       const reg = await navigator.serviceWorker.getRegistration("/pv-sw.js");

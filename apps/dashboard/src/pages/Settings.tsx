@@ -27,6 +27,17 @@ interface AuditRow {
   at: string;
 }
 
+interface Billing {
+  plan: string;
+  planLabel: string;
+  quota: number | null;
+  used: number;
+  remaining: number | null;
+  resetsAt: string;
+  plans: { key: string; label: string; quota: number | null }[];
+  stripeConfigured: boolean;
+}
+
 export default function Settings() {
   const [tenant, setTenant] = useState<Tenant | null>(null);
   const [users, setUsers] = useState<User[]>([]);
@@ -35,12 +46,45 @@ export default function Settings() {
   const [saving, setSaving] = useState(false);
 
   const [audit, setAudit] = useState<AuditRow[]>([]);
+  const [billing, setBilling] = useState<Billing | null>(null);
+  const [properties, setProperties] = useState<{ id: string; name: string }[]>([]);
+  const [showAddUser, setShowAddUser] = useState(false);
+  const [newUser, setNewUser] = useState({ email: "", password: "", role: "manager", propertyIds: [] as string[] });
 
-  useEffect(() => {
+  const load = () => {
     api<Tenant>("/tenant").then(setTenant).catch((e) => setError(e.message));
     api<User[]>("/users").then(setUsers).catch(() => {});
     api<AuditRow[]>("/audit").then(setAudit).catch(() => {});
-  }, []);
+    api<Billing>("/billing").then(setBilling).catch(() => {});
+    api<{ id: string; name: string }[]>("/properties").then(setProperties).catch(() => {});
+  };
+  useEffect(load, []);
+
+  async function addUser(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    try {
+      await api("/users", { method: "POST", body: JSON.stringify(newUser) });
+      setShowAddUser(false);
+      setNewUser({ email: "", password: "", role: "manager", propertyIds: [] });
+      setMsg("User created");
+      load();
+    } catch (err: any) {
+      setError(err.message);
+    }
+  }
+
+  async function removeUser(id: string) {
+    if (!confirm("Remove this user?")) return;
+    await api(`/users/${id}`, { method: "DELETE" });
+    load();
+  }
+
+  async function changePlan(plan: string) {
+    await api("/tenant", { method: "PATCH", body: JSON.stringify({ plan }) });
+    setMsg(`Plan changed to ${plan}`);
+    load();
+  }
 
   async function save() {
     if (!tenant) return;
@@ -107,13 +151,61 @@ export default function Settings() {
       </div>
 
       <div className="panel">
-        <h3>Team</h3>
+        <h3>Plan &amp; usage</h3>
+        {billing && (
+          <>
+            <div className="flex-between" style={{ marginBottom: 10 }}>
+              <span className="badge purple">{billing.planLabel}</span>
+              <span style={{ fontSize: 12, color: "var(--text-dim)" }}>
+                resets {new Date(billing.resetsAt).toLocaleDateString()}
+              </span>
+            </div>
+            <div style={{ height: 10, background: "var(--bg-elevated)", borderRadius: 5, overflow: "hidden", marginBottom: 6 }}>
+              <div
+                style={{
+                  height: "100%",
+                  width: billing.quota ? `${Math.min((billing.used / billing.quota) * 100, 100)}%` : "4%",
+                  background: billing.quota && billing.used / billing.quota > 0.9 ? "var(--red)" : "var(--accent)",
+                }}
+              />
+            </div>
+            <div style={{ fontSize: 13, color: "var(--text-dim)", marginBottom: 14 }}>
+              {billing.used.toLocaleString()} pushes used this month
+              {billing.quota !== null && <> of {billing.quota.toLocaleString()} ({billing.remaining!.toLocaleString()} left)</>}
+              {billing.quota === null && <> — unlimited</>}
+            </div>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+              {billing.plans.map((p) => (
+                <button
+                  key={p.key}
+                  className={"btn small " + (p.key === billing.plan ? "" : "secondary")}
+                  onClick={() => changePlan(p.key)}
+                >
+                  {p.label}
+                </button>
+              ))}
+            </div>
+            <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 10 }}>
+              {billing.stripeConfigured
+                ? "Stripe connected — checkout enabled."
+                : "Self-serve payments are stubbed: set STRIPE_SECRET_KEY to enable Stripe checkout. Plan changes here are unmetered (dev mode). Quotas ARE enforced on sends."}
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="panel">
+        <div className="flex-between">
+          <h3>Team</h3>
+          <button className="btn secondary small" onClick={() => setShowAddUser(true)}>+ Add user</button>
+        </div>
         <table>
           <thead>
             <tr>
               <th>Email</th>
               <th>Role</th>
               <th>Last login</th>
+              <th></th>
             </tr>
           </thead>
           <tbody>
@@ -126,11 +218,60 @@ export default function Settings() {
                 <td style={{ fontSize: 12 }}>
                   {u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : "never"}
                 </td>
+                <td>
+                  <button className="btn secondary small" onClick={() => removeUser(u.id)}>🗑</button>
+                </td>
               </tr>
             ))}
           </tbody>
         </table>
       </div>
+
+      {showAddUser && (
+        <div className="modal-backdrop" onClick={() => setShowAddUser(false)}>
+          <form className="modal" onClick={(e) => e.stopPropagation()} onSubmit={addUser}>
+            <h2>Add user</h2>
+            <label>Email</label>
+            <input type="email" value={newUser.email} onChange={(e) => setNewUser({ ...newUser, email: e.target.value })} autoFocus />
+            <label>Password (min 8 chars)</label>
+            <input type="text" value={newUser.password} onChange={(e) => setNewUser({ ...newUser, password: e.target.value })} />
+            <label>Role</label>
+            <select value={newUser.role} onChange={(e) => setNewUser({ ...newUser, role: e.target.value })}>
+              <option value="admin">Admin — full access</option>
+              <option value="manager">Manager — full access, no user management</option>
+              <option value="client">Client — read-only portal, selected properties</option>
+            </select>
+            {newUser.role === "client" && (
+              <>
+                <label>Properties this client may view</label>
+                {properties.map((p) => (
+                  <div key={p.id} style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 4 }}>
+                    <input
+                      type="checkbox"
+                      style={{ width: "auto" }}
+                      checked={newUser.propertyIds.includes(p.id)}
+                      onChange={(e) =>
+                        setNewUser({
+                          ...newUser,
+                          propertyIds: e.target.checked
+                            ? [...newUser.propertyIds, p.id]
+                            : newUser.propertyIds.filter((x) => x !== p.id),
+                        })
+                      }
+                    />
+                    <span style={{ fontSize: 13 }}>{p.name}</span>
+                  </div>
+                ))}
+              </>
+            )}
+            {error && <div className="error-msg">{error}</div>}
+            <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+              <button className="btn" disabled={!newUser.email || newUser.password.length < 8}>Create user</button>
+              <button type="button" className="btn secondary" onClick={() => setShowAddUser(false)}>Cancel</button>
+            </div>
+          </form>
+        </div>
+      )}
 
       <div className="panel">
         <h3>API keys</h3>

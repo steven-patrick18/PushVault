@@ -18,6 +18,8 @@ interface Campaign {
   imageUrl: string | null;
   clickUrl: string;
   actions: CampaignAction[] | null;
+  abConfig: { enabled: boolean; variantB?: { title?: string; body?: string } } | null;
+  recurrence: { freq: string; interval?: number; byweekday?: number[] } | null;
   status: string;
   scheduleAt: string | null;
   pacingPerMinute: number | null;
@@ -34,7 +36,11 @@ interface Report {
   funnel: { targeted: number; queued: number; sent: number; delivered: number; clicked: number; failed: number; expired: number };
   ctr: number | null;
   errors: { code: string; count: number }[];
+  variants: { variant: string; sent: number; clicked: number; ctr: number }[] | null;
+  revenue: { conversions: number; amount: number };
 }
+
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 const STATUS_BADGE: Record<string, string> = {
   draft: "gray", scheduled: "purple", sending: "amber", sent: "green", cancelled: "gray", failed: "amber",
@@ -223,6 +229,9 @@ export default function CampaignDetail() {
   const [platform, setPlatform] = useState<Platform>("android");
   const [form, setForm] = useState({ name: "", title: "", body: "", clickUrl: "", iconUrl: "", imageUrl: "", segmentId: "", pacing: "", scheduleAt: "" });
   const [actions, setActions] = useState<ActionRow[]>([]);
+  const [ab, setAb] = useState({ enabled: false, titleB: "", bodyB: "" });
+  const [repeat, setRepeat] = useState<string>("none");
+  const [weekdays, setWeekdays] = useState<number[]>([]);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -245,6 +254,13 @@ export default function CampaignDetail() {
           value: a.url?.startsWith("tel:") ? a.url.slice(4) : a.url,
         })),
       );
+      setAb({
+        enabled: c.abConfig?.enabled ?? false,
+        titleB: c.abConfig?.variantB?.title ?? "",
+        bodyB: c.abConfig?.variantB?.body ?? "",
+      });
+      setRepeat(c.recurrence?.freq ?? "none");
+      setWeekdays(c.recurrence?.byweekday ?? []);
       if (c.status !== "draft") {
         api<Report>(`/campaigns/${id}/report`).then(setReport).catch(() => {});
       }
@@ -292,6 +308,9 @@ export default function CampaignDetail() {
           actions: actionsPayload(),
           segmentId: form.segmentId || null,
           pacingPerMinute: form.pacing ? Number(form.pacing) : null,
+          abConfig: ab.enabled
+            ? { enabled: true, variantB: { title: ab.titleB, body: ab.bodyB } }
+            : null,
         }),
       });
       setMsg("Saved");
@@ -317,7 +336,13 @@ export default function CampaignDetail() {
     if (!(await save())) return;
     await api(`/campaigns/${id}/schedule`, {
       method: "POST",
-      body: JSON.stringify({ schedule_at: new Date(form.scheduleAt).toISOString() }),
+      body: JSON.stringify({
+        schedule_at: new Date(form.scheduleAt).toISOString(),
+        recurrence:
+          repeat === "none"
+            ? null
+            : { freq: repeat, interval: 1, ...(repeat === "WEEKLY" && weekdays.length ? { byweekday: weekdays } : {}) },
+      }),
     });
     load();
   }
@@ -472,6 +497,29 @@ export default function CampaignDetail() {
               </div>
             )}
 
+            <h3 style={{ marginTop: 22 }}>A/B test</h3>
+            <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+              <select
+                style={{ width: 220 }}
+                value={ab.enabled ? "on" : "off"}
+                onChange={(e) => setAb({ ...ab, enabled: e.target.value === "on" })}
+              >
+                <option value="off">Off — single message</option>
+                <option value="on">On — 50/50 split A vs B</option>
+              </select>
+            </div>
+            {ab.enabled && (
+              <div className="panel" style={{ padding: 12, marginTop: 10 }}>
+                <div style={{ fontSize: 12, color: "var(--text-dim)", marginBottom: 6 }}>
+                  Variant A = the title/body above. Variant B below — leave a field blank to reuse A's.
+                </div>
+                <label>Variant B title</label>
+                <input value={ab.titleB} onChange={(e) => setAb({ ...ab, titleB: e.target.value })} placeholder={form.title} />
+                <label>Variant B body</label>
+                <textarea rows={2} value={ab.bodyB} onChange={(e) => setAb({ ...ab, bodyB: e.target.value })} placeholder={form.body} />
+              </div>
+            )}
+
             <h3 style={{ marginTop: 22 }}>Targeting &amp; pacing</h3>
             <label>Leads (segment)</label>
             <select value={form.segmentId} onChange={(e) => setForm({ ...form, segmentId: e.target.value })}>
@@ -508,6 +556,34 @@ export default function CampaignDetail() {
               <>
                 <label>Schedule for later (optional)</label>
                 <input type="datetime-local" value={form.scheduleAt} onChange={(e) => setForm({ ...form, scheduleAt: e.target.value })} />
+                <label>Repeat</label>
+                <select value={repeat} onChange={(e) => setRepeat(e.target.value)} style={{ width: 220 }}>
+                  <option value="none">Does not repeat</option>
+                  <option value="DAILY">Daily</option>
+                  <option value="WEEKLY">Weekly</option>
+                  <option value="MONTHLY">Monthly</option>
+                </select>
+                {repeat === "WEEKLY" && (
+                  <div style={{ display: "flex", gap: 4, marginTop: 8, flexWrap: "wrap" }}>
+                    {WEEKDAYS.map((d, i) => (
+                      <button
+                        key={d}
+                        type="button"
+                        className={"btn small " + (weekdays.includes(i) ? "" : "secondary")}
+                        onClick={() =>
+                          setWeekdays(weekdays.includes(i) ? weekdays.filter((x) => x !== i) : [...weekdays, i])
+                        }
+                      >
+                        {d}
+                      </button>
+                    ))}
+                  </div>
+                )}
+                {repeat !== "none" && (
+                  <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 6 }}>
+                    Each occurrence is sent as a copy; this campaign stays scheduled for the next run.
+                  </div>
+                )}
               </>
             )}
           </fieldset>
@@ -545,6 +621,37 @@ export default function CampaignDetail() {
             <div className="card"><div className="label">Failed</div><div className="value">{report.funnel.failed}</div></div>
             <div className="card"><div className="label">Pruned</div><div className="value">{report.funnel.expired}</div></div>
           </div>
+          {report.revenue.conversions > 0 && (
+            <div style={{ marginTop: 14 }}>
+              <span className="badge green">
+                💰 ₹{report.revenue.amount.toLocaleString()} revenue from {report.revenue.conversions} conversion{report.revenue.conversions > 1 ? "s" : ""}
+              </span>
+            </div>
+          )}
+          {report.variants && (
+            <div style={{ marginTop: 16 }}>
+              <label>A/B result</label>
+              <table>
+                <thead>
+                  <tr><th>Variant</th><th>Sent</th><th>Clicked</th><th>CTR</th><th></th></tr>
+                </thead>
+                <tbody>
+                  {report.variants.map((v, i) => {
+                    const best = report.variants!.every((o) => v.ctr >= o.ctr) && v.ctr > 0;
+                    return (
+                      <tr key={v.variant}>
+                        <td><span className="badge purple">Variant {v.variant}</span></td>
+                        <td>{v.sent}</td>
+                        <td>{v.clicked}</td>
+                        <td>{v.ctr}%</td>
+                        <td>{best && <span className="badge green">🏆 winner</span>}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
           {report.errors.length > 0 && (
             <div style={{ marginTop: 12, fontSize: 13, color: "var(--text-dim)" }}>
               Errors: {report.errors.map((e) => `${e.code}×${e.count}`).join(" · ")}

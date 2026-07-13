@@ -24,9 +24,14 @@ export class PushError extends Error {
   }
 }
 
+export interface VapidOverride {
+  publicKey: string;
+  privateKey: string;
+}
+
 @Injectable()
 export class PushService {
-  send(sub: PushSubscriptionKeys, payload: PushPayload): Promise<void> {
+  send(sub: PushSubscriptionKeys, payload: PushPayload, vapid?: VapidOverride | null): Promise<void> {
     const body = JSON.stringify(payload);
     if (Buffer.byteLength(body) > 4096) {
       return Promise.reject(new PushError(413));
@@ -46,8 +51,8 @@ export class PushService {
           urgency: "normal",
           vapidDetails: {
             subject: process.env.VAPID_SUBJECT ?? "mailto:ops@pushvault.local",
-            publicKey: process.env.VAPID_PUBLIC_KEY!,
-            privateKey: process.env.VAPID_PRIVATE_KEY!,
+            publicKey: vapid?.publicKey ?? process.env.VAPID_PUBLIC_KEY!,
+            privateKey: vapid?.privateKey ?? process.env.VAPID_PRIVATE_KEY!,
           },
         },
       )

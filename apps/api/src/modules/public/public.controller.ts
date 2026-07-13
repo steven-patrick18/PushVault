@@ -9,7 +9,7 @@ import {
   Query,
   UseGuards,
 } from "@nestjs/common";
-import { IsNotEmpty, IsObject, IsOptional, IsString, IsUUID } from "class-validator";
+import { IsNotEmpty, IsNumber, IsObject, IsOptional, IsString, IsUUID, Min } from "class-validator";
 import { PublicService } from "./public.service";
 import { RateLimit, RateLimitGuard } from "../../common/rate-limit.guard";
 
@@ -67,6 +67,28 @@ class PageviewDto {
   path: string;
 }
 
+class ConversionDto {
+  @IsString()
+  @IsNotEmpty()
+  property_key: string;
+
+  @IsOptional()
+  @IsUUID()
+  send_id?: string;
+
+  @IsNumber()
+  @Min(0.01)
+  amount: number;
+
+  @IsOptional()
+  @IsString()
+  currency?: string;
+
+  @IsOptional()
+  @IsString()
+  order_id?: string;
+}
+
 @Controller("public")
 @UseGuards(RateLimitGuard)
 export class PublicController {
@@ -112,5 +134,16 @@ export class PublicController {
   @RateLimit({ limit: 120, windowSec: 60, perProperty: true })
   pageview(@Body() dto: PageviewDto, @Headers("origin") origin?: string) {
     return this.service.trackPageview(dto.property_key, dto.path, origin);
+  }
+
+  /** Revenue pixel — called by window.PushVault.trackConversion(...) */
+  @Post("event/conversion")
+  @HttpCode(200)
+  @RateLimit({ limit: 60, windowSec: 60, perProperty: true })
+  conversion(@Body() dto: ConversionDto, @Headers("origin") origin?: string) {
+    return this.service.trackConversion(
+      { ...dto, amount: Number(dto.amount), source: "pixel" },
+      origin,
+    );
   }
 }

@@ -39,6 +39,10 @@ Proves via the restricted `pv_app` role that a tenant cannot read, update, or in
 - [x] **M3** — Send engine: per-tenant queues, frequency caps, 410 pruning, 429 backoff, pacing
 - [x] **M4** — Dashboard v1: subscribers, segments, campaign manager with platform previews, property manager (verify + page allow/block + prompt designer), settings
 - [x] **M5** — Hardening: rate limits (subscribe 10/min/IP/property, login 5/min/IP), audit log + viewer, GDPR erasure, maintenance jobs (segment cache, stuck-campaign finalizer, 90d send retention), load test 100 req/s sustained (p50 76 ms)
+- [x] **Phase 2** — Recurring campaigns (daily/weekly/monthly, cloned occurrences), client portal role (read-only, property-scoped), WordPress/Shopify/HTML install guides, exit-intent trigger, growth analytics
+- [x] **Phase 3** — Drip automations (DB-backed scheduler, welcome series on subscribe), A/B testing (50/50 split, per-variant CTR + winner), revenue attribution (pv_sid click handoff → `PushVault.trackConversion` pixel + X-Api-Key webhook), per-property VAPID keys, plans/quotas with usage metering (Stripe checkout stubbed — set STRIPE_SECRET_KEY)
+
+**Deliberately deferred:** ClickHouse event store (Postgres is fine below ~10M sends/mo; swap point is the `sends` table) and live Stripe checkout (needs account keys; quota enforcement is active regardless).
 
 ## Production notes
 

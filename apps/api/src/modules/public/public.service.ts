@@ -7,6 +7,7 @@ import {
 import { UAParser } from "ua-parser-js";
 import { PrismaService } from "../../infra/prisma.service";
 import { GeoService } from "./geo.service";
+import { AutomationsService } from "../automations/automations.service";
 
 interface SubscribeInput {
   property_key: string;
@@ -23,6 +24,7 @@ export class PublicService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly geo: GeoService,
+    private readonly automations: AutomationsService,
   ) {}
 
   /** Resolve property by key and validate the request Origin against its domains. */
@@ -84,6 +86,11 @@ export class PublicService {
       referrer: input.referrer ?? null,
     };
 
+    const existing = await db.subscriber.findUnique({
+      where: { propertyId_endpoint: { propertyId: property.id, endpoint } },
+      select: { id: true },
+    });
+
     const subscriber = await db.subscriber.upsert({
       where: {
         propertyId_endpoint: { propertyId: property.id, endpoint },
@@ -114,17 +121,83 @@ export class PublicService {
       },
     });
 
+    // new subscriber → kick off drip automations (welcome series)
+    if (!existing) {
+      void this.automations
+        .enqueueForSubscriber(property.tenantId, property.id, subscriber.id)
+        .catch(() => undefined);
+    }
+
     return { subscriber_id: subscriber.id };
   }
 
   async unsubscribe(propertyKey: string, endpoint: string, origin: string | undefined) {
     const property = await this.resolveProperty(propertyKey, origin);
     const db = this.prisma.forTenant(property.tenantId);
+    const sub = await db.subscriber.findUnique({
+      where: { propertyId_endpoint: { propertyId: property.id, endpoint } },
+      select: { id: true },
+    });
     await db.subscriber.updateMany({
       where: { propertyId: property.id, endpoint },
       data: { status: "unsubscribed", unsubscribedAt: new Date() },
     });
+    if (sub) {
+      void this.automations.cancelForSubscriber(property.tenantId, sub.id).catch(() => undefined);
+    }
     return { ok: true };
+  }
+
+  /** Revenue attribution: reported by the pixel (snippet) or the webhook. */
+  async trackConversion(
+    input: {
+      property_key?: string;
+      propertyId?: string;
+      tenantId?: string;
+      send_id?: string;
+      amount: number;
+      currency?: string;
+      order_id?: string;
+      source: "pixel" | "webhook";
+    },
+    origin?: string,
+  ) {
+    let tenantId = input.tenantId;
+    let propertyId = input.propertyId;
+    if (!tenantId || !propertyId) {
+      const property = await this.resolveProperty(input.property_key!, origin);
+      tenantId = property.tenantId;
+      propertyId = property.id;
+    }
+    if (!(input.amount > 0)) throw new BadRequestException("amount must be > 0");
+
+    const db = this.prisma.forTenant(tenantId);
+    let subscriberId: string | null = null;
+    let campaignId: string | null = null;
+    let sendId: string | null = null;
+    if (input.send_id) {
+      const send = await db.send.findUnique({ where: { id: input.send_id } });
+      if (send) {
+        sendId = send.id;
+        subscriberId = send.subscriberId;
+        campaignId = send.campaignId;
+      }
+    }
+
+    const conversion = await db.conversion.create({
+      data: {
+        tenantId,
+        propertyId,
+        subscriberId,
+        sendId,
+        campaignId,
+        orderId: input.order_id ?? null,
+        amount: input.amount,
+        currency: (input.currency ?? "INR").toUpperCase().slice(0, 3),
+        source: input.source,
+      },
+    });
+    return { ok: true, conversion_id: conversion.id, attributed: Boolean(sendId) };
   }
 
   /** Page discovery: the snippet beacons each page it loads on. */
@@ -160,10 +233,12 @@ export class PublicService {
       where: { id: send.subscriberId },
       data: { pushesClicked: { increment: 1 }, lastClickAt: now },
     });
-    await db.campaign.update({
-      where: { id: send.campaignId },
-      data: { totalClicked: { increment: 1 } },
-    });
+    if (send.campaignId) {
+      await db.campaign.update({
+        where: { id: send.campaignId },
+        data: { totalClicked: { increment: 1 } },
+      });
+    }
     return { ok: true };
   }
 }

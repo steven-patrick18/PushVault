@@ -1,6 +1,7 @@
 import {
   CanActivate,
   ExecutionContext,
+  ForbiddenException,
   Injectable,
   UnauthorizedException,
   createParamDecorator,
@@ -13,6 +14,14 @@ export interface AuthUser {
   tenantId: string;
   role: "admin" | "manager" | "client";
   email: string;
+  /** role=client: the only properties this user may see (empty = none) */
+  propertyIds: string[];
+}
+
+/** Prisma `where` fragment limiting a client-role user to their properties. */
+export function propertyScope(user: AuthUser): Record<string, unknown> {
+  if (user.role !== "client") return {};
+  return { propertyId: { in: user.propertyIds } };
 }
 
 @Injectable()
@@ -26,18 +35,24 @@ export class JwtAuthGuard implements CanActivate {
     if (scheme !== "Bearer" || !token) {
       throw new UnauthorizedException("Missing bearer token");
     }
+    let payload: any;
     try {
-      const payload = await this.jwt.verifyAsync(token);
-      (req as any).user = {
-        userId: payload.sub,
-        tenantId: payload.tenantId,
-        role: payload.role,
-        email: payload.email,
-      } satisfies AuthUser;
-      return true;
+      payload = await this.jwt.verifyAsync(token);
     } catch {
       throw new UnauthorizedException("Invalid or expired token");
     }
+    (req as any).user = {
+      userId: payload.sub,
+      tenantId: payload.tenantId,
+      role: payload.role,
+      email: payload.email,
+      propertyIds: payload.propertyIds ?? [],
+    } satisfies AuthUser;
+    // client portal is read-only
+    if (payload.role === "client" && req.method !== "GET") {
+      throw new ForbiddenException("Client accounts are read-only");
+    }
+    return true;
   }
 }
 

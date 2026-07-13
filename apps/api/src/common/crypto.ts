@@ -1,4 +1,4 @@
-import { randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { createHash, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
 
 const SCRYPT_N = 16384;
 const SCRYPT_R = 8;
@@ -35,4 +35,12 @@ export function verifySecret(plain: string, stored: string): boolean {
 /** Generates keys like pk_live_xxx / sk_live_xxx */
 export function generateKey(prefix: string): string {
   return `${prefix}_${randomBytes(24).toString("base64url")}`;
+}
+
+/**
+ * API keys are 192-bit random strings, so a plain SHA-256 digest is safe AND
+ * allows O(1) lookup by hash (scrypt's random salt would force a scan).
+ */
+export function hashApiKey(key: string): string {
+  return createHash("sha256").update(key).digest("hex");
 }

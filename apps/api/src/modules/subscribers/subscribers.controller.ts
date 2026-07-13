@@ -8,7 +8,7 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import { PrismaService } from "../../infra/prisma.service";
-import { AuthUser, CurrentUser, JwtAuthGuard } from "../../common/auth.guard";
+import { AuthUser, CurrentUser, JwtAuthGuard, propertyScope } from "../../common/auth.guard";
 
 @Controller("subscribers")
 @UseGuards(JwtAuthGuard)
@@ -28,7 +28,7 @@ export class SubscribersController {
     @Query("page") page = "1",
     @Query("page_size") pageSize = "25",
   ) {
-    const where: any = {};
+    const where: any = { ...propertyScope(user) };
     if (propertyId) where.propertyId = propertyId;
     if (status) where.status = status;
     if (utmCampaign) where.utmCampaign = utmCampaign;
@@ -83,14 +83,14 @@ export class SubscribersController {
   async stats(@CurrentUser() user: AuthUser, @Query("property_id") propertyId?: string) {
     const db = this.prisma.forTenant(user.tenantId);
     const since = new Date(Date.now() - 30 * 86400_000);
-    const where: any = { subscribedAt: { gte: since } };
+    const where: any = { subscribedAt: { gte: since }, ...propertyScope(user) };
     if (propertyId) where.propertyId = propertyId;
 
     const [recent, byCampaign] = await Promise.all([
       db.subscriber.findMany({ where, select: { subscribedAt: true } }),
       db.subscriber.groupBy({
         by: ["utmCampaign"],
-        where: propertyId ? { propertyId } : undefined,
+        where: { ...propertyScope(user), ...(propertyId ? { propertyId } : {}) },
         _count: { _all: true },
         orderBy: { _count: { utmCampaign: "desc" } },
         take: 8,

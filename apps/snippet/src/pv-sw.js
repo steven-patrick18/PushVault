@@ -17,7 +17,15 @@ self.addEventListener("push", (e) => {
 self.addEventListener("notificationclick", (e) => {
   e.notification.close();
   const { url, send_id } = e.notification.data || {};
-  const target = (e.action && (e.notification.data.actions || []).find((a) => a.action === e.action)?.url) || url;
+  let target = (e.action && (e.notification.data.actions || []).find((a) => a.action === e.action)?.url) || url;
+  // tag the landing URL with the send id so the page pixel can attribute revenue
+  if (send_id && /^https?:/.test(target)) {
+    try {
+      const u = new URL(target);
+      u.searchParams.set("pv_sid", send_id);
+      target = u.toString();
+    } catch (_) {}
+  }
   e.waitUntil(
     (async () => {
       try {
