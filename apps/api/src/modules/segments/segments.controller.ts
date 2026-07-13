@@ -15,6 +15,7 @@ import { IsBoolean, IsObject, IsOptional, IsString, IsUUID, MinLength } from "cl
 import { PrismaService } from "../../infra/prisma.service";
 import { AuthUser, CurrentUser, JwtAuthGuard, propertyScope } from "../../common/auth.guard";
 import { compileCriteria, segmentAudienceWhere, SegmentCriteria } from "./segment-compiler";
+import { SubscriberFilterParams, buildSubscriberWhere } from "../../common/subscriber-filters";
 
 // cumulative "last X" windows for blast activity, in minutes
 const ACTIVITY_WINDOWS = [
@@ -269,20 +270,96 @@ export class SegmentsController {
     const db = this.db(user);
     const segment = await db.segment.findUnique({ where: { id } });
     if (!segment) throw new NotFoundException("Segment not found");
-    const criteria = (segment.criteria as SegmentCriteria) ?? {};
-    const include = new Set(criteria.manual_include ?? []);
-    const exclude = new Set(criteria.manual_exclude ?? []);
     if (op === "add") {
-      include.add(subscriberId);
-      exclude.delete(subscriberId);
+      // one lead lives in exactly one segment: adding here evicts it everywhere else
+      const moved = await this.exclusiveAssign(user, segment, [subscriberId]);
+      await this.audit(user, "segment.member_add", id, null, { subscriberId, evictedFromOthers: moved });
     } else {
+      const criteria = (segment.criteria as SegmentCriteria) ?? {};
+      const include = new Set(criteria.manual_include ?? []);
+      const exclude = new Set(criteria.manual_exclude ?? []);
       exclude.add(subscriberId);
       include.delete(subscriberId);
+      await db.segment.update({
+        where: { id },
+        data: { criteria: { ...criteria, manual_include: [...include], manual_exclude: [...exclude] } as any },
+      });
+      await this.audit(user, "segment.member_remove", id, null, { subscriberId });
     }
-    const next = { ...criteria, manual_include: [...include], manual_exclude: [...exclude] };
-    await db.segment.update({ where: { id }, data: { criteria: next as any } });
-    await this.audit(user, `segment.member_${op}`, id, null, { subscriberId });
     return { ok: true };
+  }
+
+  /**
+   * Exclusive membership: put `ids` in `target` and pull them out of every
+   * other segment of the same property (manual_exclude beats any filter).
+   */
+  private async exclusiveAssign(
+    user: AuthUser,
+    target: { id: string; propertyId: string; criteria: unknown },
+    ids: string[],
+  ): Promise<number> {
+    const db = this.db(user);
+    const idSet = new Set(ids);
+    const siblings = await db.segment.findMany({ where: { propertyId: target.propertyId } });
+    let touchedOthers = 0;
+    for (const seg of siblings) {
+      const criteria = (seg.criteria as SegmentCriteria) ?? {};
+      const include = new Set(criteria.manual_include ?? []);
+      const exclude = new Set(criteria.manual_exclude ?? []);
+      if (seg.id === target.id) {
+        for (const sid of idSet) {
+          include.add(sid);
+          exclude.delete(sid);
+        }
+      } else {
+        let changed = false;
+        for (const sid of idSet) {
+          if (include.has(sid)) { include.delete(sid); changed = true; }
+          if (!exclude.has(sid)) { exclude.add(sid); changed = true; }
+        }
+        if (!changed) continue;
+        touchedOthers++;
+      }
+      await db.segment.update({
+        where: { id: seg.id },
+        data: {
+          criteria: { ...criteria, manual_include: [...include], manual_exclude: [...exclude] } as any,
+        },
+      });
+    }
+    return touchedOthers;
+  }
+
+  /** Bulk assign: every lead matching the filters moves into this segment (exclusively). */
+  @Post(":id/assign-filtered")
+  async assignFiltered(
+    @CurrentUser() user: AuthUser,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() body: { filters?: SubscriberFilterParams },
+  ) {
+    const db = this.db(user);
+    const segment = await db.segment.findUnique({ where: { id } });
+    if (!segment) throw new NotFoundException("Segment not found");
+    const where = {
+      ...buildSubscriberWhere(body.filters ?? {}),
+      propertyId: segment.propertyId, // never cross properties
+    };
+    const matches = await db.subscriber.findMany({
+      where,
+      select: { id: true },
+      take: 50_000,
+    });
+    if (matches.length === 0) return { assigned: 0, evictedFromOtherSegments: 0 };
+    const evicted = await this.exclusiveAssign(
+      user,
+      segment,
+      matches.map((m) => m.id),
+    );
+    await this.audit(user, "segment.assign_filtered", id, null, {
+      filters: body.filters,
+      assigned: matches.length,
+    });
+    return { assigned: matches.length, evictedFromOtherSegments: evicted };
   }
 
   /** Blast activity for this segment's leads in cumulative time windows. */

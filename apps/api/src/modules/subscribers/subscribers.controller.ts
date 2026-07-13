@@ -9,6 +9,10 @@ import {
 } from "@nestjs/common";
 import { PrismaService } from "../../infra/prisma.service";
 import { AuthUser, CurrentUser, JwtAuthGuard, propertyScope } from "../../common/auth.guard";
+import {
+  SubscriberFilterParams,
+  buildSubscriberWhere,
+} from "../../common/subscriber-filters";
 
 @Controller("subscribers")
 @UseGuards(JwtAuthGuard)
@@ -18,33 +22,18 @@ export class SubscribersController {
   @Get()
   async list(
     @CurrentUser() user: AuthUser,
-    @Query("property_id") propertyId?: string,
-    @Query("status") status?: string,
-    @Query("utm_campaign") utmCampaign?: string,
-    @Query("country") country?: string,
-    @Query("device") device?: string,
-    @Query("from") from?: string,
-    @Query("to") to?: string,
-    @Query("page") page = "1",
-    @Query("page_size") pageSize = "25",
+    @Query() query: SubscriberFilterParams & { page?: string; page_size?: string },
   ) {
-    const where: any = { ...propertyScope(user) };
-    if (propertyId) where.propertyId = propertyId;
-    if (status) where.status = status;
-    if (utmCampaign) where.utmCampaign = utmCampaign;
-    if (country) where.country = country;
-    if (device) where.device = device;
-    if (from || to) {
-      where.subscribedAt = {};
-      if (from) where.subscribedAt.gte = new Date(from);
-      if (to) where.subscribedAt.lte = new Date(to);
-    }
+    const where: any = { ...buildSubscriberWhere(query), ...propertyScope(user) };
+    const take = Math.min(Math.max(Number(query.page_size) || 25, 1), 100);
+    const skip = (Math.max(Number(query.page) || 1, 1) - 1) * take;
 
-    const take = Math.min(Math.max(Number(pageSize) || 25, 1), 100);
-    const skip = (Math.max(Number(page) || 1, 1) - 1) * take;
+    // status totals honor every filter EXCEPT status itself
+    const totalsWhere: any = { ...where };
+    delete totalsWhere.status;
 
     const db = this.prisma.forTenant(user.tenantId);
-    const [rows, total] = await Promise.all([
+    const [rows, total, statusTotals] = await Promise.all([
       db.subscriber.findMany({
         where,
         orderBy: { subscribedAt: "desc" },
@@ -69,13 +58,68 @@ export class SubscribersController {
           timezone: true,
           pushesReceived: true,
           pushesClicked: true,
+          lastPushAt: true,
           subscribedAt: true,
+          unsubscribedAt: true,
+          updatedAt: true,
         },
       }),
       db.subscriber.count({ where }),
+      db.subscriber.groupBy({
+        by: ["status"],
+        where: totalsWhere,
+        _count: { status: true },
+      }),
     ]);
 
-    return { rows, total, page: Number(page), pageSize: take };
+    const totals: Record<string, number> = { active: 0, unsubscribed: 0, expired: 0 };
+    for (const t of statusTotals) totals[t.status] = t._count.status;
+
+    return {
+      rows: rows.map((r) => ({
+        ...r,
+        // when the status happened: unsubscribed → explicit; expired → last row change
+        statusAt:
+          r.status === "unsubscribed"
+            ? r.unsubscribedAt
+            : r.status === "expired"
+              ? r.updatedAt
+              : r.subscribedAt,
+      })),
+      total,
+      totals,
+      page: Number(query.page) || 1,
+      pageSize: take,
+    };
+  }
+
+  /** Distinct values for the filter dropdowns. */
+  @Get("facets")
+  async facets(@CurrentUser() user: AuthUser, @Query("property_id") propertyId?: string) {
+    const db = this.prisma.forTenant(user.tenantId);
+    const base: any = { ...propertyScope(user) };
+    if (propertyId) base.propertyId = propertyId;
+
+    const distinct = async (field: string) => {
+      const rows = await db.subscriber.groupBy({
+        by: [field as any],
+        where: { ...base, [field]: { not: null } },
+        _count: { _all: true },
+        orderBy: { _count: { [field]: "desc" } } as any,
+        take: 50,
+      });
+      return rows.map((r: any) => ({ value: r[field], count: r._count._all }));
+    };
+
+    const [countries, browsers, oses, languages, timezones, campaigns] = await Promise.all([
+      distinct("country"),
+      distinct("browser"),
+      distinct("os"),
+      distinct("language"),
+      distinct("timezone"),
+      distinct("utmCampaign"),
+    ]);
+    return { countries, browsers, oses, languages, timezones, campaigns };
   }
 
   /** Growth stats for the overview: new subscribers per day + by campaign. */
