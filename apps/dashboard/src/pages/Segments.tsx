@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { api } from "../api";
 
 interface Segment {
@@ -53,6 +54,7 @@ function valueToString(v: unknown): string {
 }
 
 export default function Segments() {
+  const navigate = useNavigate();
   const [segments, setSegments] = useState<Segment[]>([]);
   const [properties, setProperties] = useState<Property[]>([]);
   const [showCreate, setShowCreate] = useState(false);
@@ -138,8 +140,10 @@ export default function Segments() {
             </thead>
             <tbody>
               {segments.map((s) => (
-                <tr key={s.id}>
-                  <td>{s.name}</td>
+                <tr key={s.id} style={{ cursor: "pointer" }} onClick={() => navigate(`/segments/${s.id}`)}>
+                  <td>
+                    <span style={{ color: "var(--accent-hover)", fontWeight: 600 }}>{s.name}</span>
+                  </td>
                   <td style={{ fontSize: 12, color: "var(--text-dim)" }}>
                     {(s.criteria?.all ?? []).map((c, i) => (
                       <div key={i}>
@@ -147,16 +151,21 @@ export default function Segments() {
                       </div>
                     ))}
                   </td>
-                  <td>
+                  <td onClick={(e) => e.stopPropagation()}>
                     {counts[s.id] ?? s.cachedCount ?? "–"}
                     <button className="btn secondary small" style={{ marginLeft: 8 }} onClick={() => count(s.id)}>
                       Count
                     </button>
                   </td>
-                  <td>
-                    <button className="btn secondary small" onClick={() => remove(s.id)}>
-                      🗑
-                    </button>
+                  <td onClick={(e) => e.stopPropagation()}>
+                    <div className="row-actions">
+                      <button className="btn secondary small" onClick={() => navigate(`/segments/${s.id}`)}>
+                        Manage
+                      </button>
+                      <button className="btn secondary small" onClick={() => remove(s.id)}>
+                        🗑
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}

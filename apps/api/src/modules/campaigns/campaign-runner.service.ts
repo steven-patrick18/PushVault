@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import { PrismaService, TenantClient } from "../../infra/prisma.service";
 import { RateLimiter, TaskPool, sleep } from "../../queue/task-pool";
 import { PushError, PushService, VapidOverride } from "./push.service";
-import { compileCriteria, SegmentCriteria } from "../segments/segment-compiler";
+import { segmentAudienceWhere, SegmentCriteria } from "../segments/segment-compiler";
 import { isRecurrence, nextOccurrence } from "./recurrence";
 import { PLAN_QUOTAS, monthStart } from "../../common/plans";
 
@@ -166,7 +166,7 @@ export class CampaignRunnerService implements OnModuleInit {
     });
 
     const segmentWhere = campaign.segment
-      ? compileCriteria(campaign.segment.criteria as SegmentCriteria)
+      ? segmentAudienceWhere(campaign.segment.criteria as SegmentCriteria)
       : {};
 
     const abRaw = campaign.abConfig as unknown as AbConfig | null;

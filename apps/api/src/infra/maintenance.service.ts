@@ -42,12 +42,12 @@ export class MaintenanceService implements OnModuleInit, OnModuleDestroy {
       where: { isDynamic: true },
       select: { id: true, tenantId: true, propertyId: true, criteria: true },
     });
-    const { compileCriteria } = await import("../modules/segments/segment-compiler");
+    const { segmentAudienceWhere } = await import("../modules/segments/segment-compiler");
     let refreshed = 0;
     for (const s of segments) {
       try {
         const db = this.prisma.forTenant(s.tenantId);
-        const where = compileCriteria(s.criteria as any);
+        const where = segmentAudienceWhere(s.criteria as any);
         const count = await db.subscriber.count({
           where: { ...where, propertyId: s.propertyId, status: "active" },
         });

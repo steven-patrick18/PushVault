@@ -8,6 +8,7 @@ import PropertyDetail from "./pages/PropertyDetail";
 import Settings from "./pages/Settings";
 import Subscribers from "./pages/Subscribers";
 import Segments from "./pages/Segments";
+import SegmentDetail from "./pages/SegmentDetail";
 import Campaigns from "./pages/Campaigns";
 import CampaignDetail from "./pages/CampaignDetail";
 import Automations from "./pages/Automations";
@@ -35,6 +36,7 @@ export default function App() {
         <Route path="properties/:id" element={<PropertyDetail />} />
         <Route path="subscribers" element={<Subscribers />} />
         <Route path="segments" element={<Segments />} />
+        <Route path="segments/:id" element={<SegmentDetail />} />
         <Route path="campaigns" element={<Campaigns />} />
         <Route path="campaigns/:id" element={<CampaignDetail />} />
         <Route path="automations" element={<Automations />} />

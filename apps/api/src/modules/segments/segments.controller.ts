@@ -14,7 +14,18 @@ import {
 import { IsBoolean, IsObject, IsOptional, IsString, IsUUID, MinLength } from "class-validator";
 import { PrismaService } from "../../infra/prisma.service";
 import { AuthUser, CurrentUser, JwtAuthGuard, propertyScope } from "../../common/auth.guard";
-import { compileCriteria, SegmentCriteria } from "./segment-compiler";
+import { compileCriteria, segmentAudienceWhere, SegmentCriteria } from "./segment-compiler";
+
+// cumulative "last X" windows for blast activity, in minutes
+const ACTIVITY_WINDOWS = [
+  { key: "10m", label: "Last 10 min", minutes: 10 },
+  { key: "30m", label: "Last 30 min", minutes: 30 },
+  { key: "1h", label: "Last 1 hr", minutes: 60 },
+  { key: "3h", label: "Last 3 hrs", minutes: 180 },
+  { key: "6h", label: "Last 6 hrs", minutes: 360 },
+  { key: "24h", label: "Last 24 hrs", minutes: 1440 },
+  { key: "7d", label: "Last 7 days", minutes: 10080 },
+];
 
 class CreateSegmentDto {
   @IsUUID()
@@ -119,13 +130,23 @@ export class SegmentsController {
     });
   }
 
+  @Get(":id")
+  async get(@CurrentUser() user: AuthUser, @Param("id", ParseUUIDPipe) id: string) {
+    const segment = await this.db(user).segment.findUnique({
+      where: { id },
+      include: { property: { select: { id: true, name: true } } },
+    });
+    if (!segment) throw new NotFoundException("Segment not found");
+    return segment;
+  }
+
   /** Evaluate the live audience size for this segment. */
   @Post(":id/count")
   async count(@CurrentUser() user: AuthUser, @Param("id", ParseUUIDPipe) id: string) {
     const db = this.db(user);
     const segment = await db.segment.findUnique({ where: { id } });
     if (!segment) throw new NotFoundException("Segment not found");
-    const where = compileCriteria(segment.criteria as SegmentCriteria);
+    const where = segmentAudienceWhere(segment.criteria as SegmentCriteria);
     const count = await db.subscriber.count({
       where: { ...where, propertyId: segment.propertyId, status: "active" },
     });
@@ -134,5 +155,176 @@ export class SegmentsController {
       data: { cachedCount: count, cachedAt: new Date() },
     });
     return { count };
+  }
+
+  /** Leads currently in the segment (filter matches + manual adds − manual removes). */
+  @Get(":id/members")
+  async members(
+    @CurrentUser() user: AuthUser,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Query("page") page = "1",
+    @Query("page_size") pageSize = "25",
+  ) {
+    const db = this.db(user);
+    const segment = await db.segment.findUnique({ where: { id } });
+    if (!segment) throw new NotFoundException("Segment not found");
+    const criteria = segment.criteria as SegmentCriteria;
+    const where = {
+      ...segmentAudienceWhere(criteria),
+      propertyId: segment.propertyId,
+      status: "active" as const,
+    };
+    const take = Math.min(Math.max(Number(pageSize) || 25, 1), 100);
+    const skip = (Math.max(Number(page) || 1, 1) - 1) * take;
+    const [rows, total] = await Promise.all([
+      db.subscriber.findMany({
+        where,
+        orderBy: { subscribedAt: "desc" },
+        skip,
+        take,
+        select: {
+          id: true, status: true, utmCampaign: true, utmSource: true, device: true,
+          browser: true, country: true, city: true, pushesReceived: true, pushesClicked: true,
+          lastPushAt: true, subscribedAt: true,
+        },
+      }),
+      db.subscriber.count({ where }),
+    ]);
+    const manualInclude = new Set(criteria.manual_include ?? []);
+    return {
+      rows: rows.map((r) => ({ ...r, manuallyAdded: manualInclude.has(r.id) })),
+      total,
+      page: Number(page),
+      pageSize: take,
+      manualExcludeCount: (criteria.manual_exclude ?? []).length,
+    };
+  }
+
+  /** Leads of the property NOT in the segment — candidates to add. */
+  @Get(":id/candidates")
+  async candidates(
+    @CurrentUser() user: AuthUser,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Query("search") search?: string,
+    @Query("page") page = "1",
+  ) {
+    const db = this.db(user);
+    const segment = await db.segment.findUnique({ where: { id } });
+    if (!segment) throw new NotFoundException("Segment not found");
+    const audience = segmentAudienceWhere(segment.criteria as SegmentCriteria);
+    const where: any = {
+      propertyId: segment.propertyId,
+      status: "active",
+      NOT: Object.keys(audience).length ? audience : undefined,
+      ...(search
+        ? {
+            OR: [
+              { utmCampaign: { contains: search, mode: "insensitive" } },
+              { utmSource: { contains: search, mode: "insensitive" } },
+              { country: { contains: search, mode: "insensitive" } },
+              { city: { contains: search, mode: "insensitive" } },
+            ],
+          }
+        : {}),
+    };
+    const take = 25;
+    const skip = (Math.max(Number(page) || 1, 1) - 1) * take;
+    const [rows, total] = await Promise.all([
+      db.subscriber.findMany({
+        where,
+        orderBy: { subscribedAt: "desc" },
+        skip,
+        take,
+        select: {
+          id: true, utmCampaign: true, utmSource: true, device: true,
+          country: true, subscribedAt: true,
+        },
+      }),
+      db.subscriber.count({ where }),
+    ]);
+    return { rows, total, page: Number(page), pageSize: take };
+  }
+
+  /** Manually add a lead to the segment. */
+  @Post(":id/members")
+  async addMember(
+    @CurrentUser() user: AuthUser,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() body: { subscriber_id: string },
+  ) {
+    return this.mutateManual(user, id, body.subscriber_id, "add");
+  }
+
+  /** Manually remove a lead from the segment. */
+  @Delete(":id/members/:subscriberId")
+  async removeMember(
+    @CurrentUser() user: AuthUser,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Param("subscriberId", ParseUUIDPipe) subscriberId: string,
+  ) {
+    return this.mutateManual(user, id, subscriberId, "remove");
+  }
+
+  private async mutateManual(user: AuthUser, id: string, subscriberId: string, op: "add" | "remove") {
+    const db = this.db(user);
+    const segment = await db.segment.findUnique({ where: { id } });
+    if (!segment) throw new NotFoundException("Segment not found");
+    const criteria = (segment.criteria as SegmentCriteria) ?? {};
+    const include = new Set(criteria.manual_include ?? []);
+    const exclude = new Set(criteria.manual_exclude ?? []);
+    if (op === "add") {
+      include.add(subscriberId);
+      exclude.delete(subscriberId);
+    } else {
+      exclude.add(subscriberId);
+      include.delete(subscriberId);
+    }
+    const next = { ...criteria, manual_include: [...include], manual_exclude: [...exclude] };
+    await db.segment.update({ where: { id }, data: { criteria: next as any } });
+    await this.audit(user, `segment.member_${op}`, id, null, { subscriberId });
+    return { ok: true };
+  }
+
+  /** Blast activity for this segment's leads in cumulative time windows. */
+  @Get(":id/activity")
+  async activity(@CurrentUser() user: AuthUser, @Param("id", ParseUUIDPipe) id: string) {
+    const db = this.db(user);
+    const segment = await db.segment.findUnique({ where: { id } });
+    if (!segment) throw new NotFoundException("Segment not found");
+    const audience = segmentAudienceWhere(segment.criteria as SegmentCriteria);
+    const since = new Date(Date.now() - ACTIVITY_WINDOWS[ACTIVITY_WINDOWS.length - 1].minutes * 60_000);
+
+    // one query, bucketed in memory (capped — fine at this scale)
+    const sends = await db.send.findMany({
+      where: {
+        createdAt: { gte: since },
+        subscriber: { ...audience, propertyId: segment.propertyId },
+      },
+      select: { status: true, clicked: true, createdAt: true },
+      take: 50_000,
+    });
+
+    const now = Date.now();
+    return ACTIVITY_WINDOWS.map((w) => {
+      const cutoff = now - w.minutes * 60_000;
+      let sent = 0, failed = 0, expired = 0, queued = 0, clicked = 0;
+      for (const s of sends) {
+        if (s.createdAt.getTime() < cutoff) continue;
+        if (s.status === "sent") sent++;
+        else if (s.status === "failed") failed++;
+        else if (s.status === "expired") expired++;
+        else queued++;
+        if (s.clicked) clicked++;
+      }
+      return {
+        ...w,
+        sent,
+        clicked,
+        failed,
+        expired,
+        queued,
+        ctr: sent > 0 ? +((clicked / sent) * 100).toFixed(2) : null,
+      };
+    });
   }
 }

@@ -26,6 +26,29 @@ interface Condition {
 
 export interface SegmentCriteria {
   all?: Condition[];
+  /** hand-picked leads always in the segment (even if the filter misses them) */
+  manual_include?: string[];
+  /** hand-removed leads never in the segment (even if the filter matches) */
+  manual_exclude?: string[];
+}
+
+/**
+ * Full audience `where`: (filter matches OR manually added) AND NOT manually removed.
+ * This is what counting, sending and member listing must all use.
+ */
+export function segmentAudienceWhere(criteria: SegmentCriteria): Record<string, any> {
+  const base = compileCriteria(criteria);
+  const include = criteria?.manual_include ?? [];
+  const exclude = criteria?.manual_exclude ?? [];
+  let where: Record<string, any> = base;
+  if (include.length > 0) {
+    where = Object.keys(base).length > 0 ? { OR: [base, { id: { in: include } }] } : base;
+    // with an empty filter everything matches anyway; includes only matter with a filter
+  }
+  if (exclude.length > 0) {
+    where = { AND: [where, { id: { notIn: exclude } }] };
+  }
+  return where;
 }
 
 // snake_case grammar field → Prisma model field + kind (for value coercion)
