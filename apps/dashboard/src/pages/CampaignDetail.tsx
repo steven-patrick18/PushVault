@@ -288,6 +288,7 @@ export default function CampaignDetail() {
   const canOperate = canEdit || role === "operator";
 
   const [tab, setTab] = useState<"basic" | "details">("basic");
+  const [tabInitialized, setTabInitialized] = useState(false);
   const [campaign, setCampaign] = useState<Campaign | null>(null);
   const [live, setLive] = useState<Live | null>(null);
   const [report, setReport] = useState<Report | null>(null);
@@ -350,6 +351,14 @@ export default function CampaignDetail() {
   }, [id]);
 
   useEffect(load, [load]);
+
+  // drafts open straight in the designer; running/sent campaigns in the monitor
+  useEffect(() => {
+    if (campaign && !tabInitialized) {
+      setTab(campaign.status === "draft" && canEdit ? "details" : "basic");
+      setTabInitialized(true);
+    }
+  }, [campaign, tabInitialized, canEdit]);
 
   // live monitor poll — every 2s while active, every 10s otherwise
   useEffect(() => {
