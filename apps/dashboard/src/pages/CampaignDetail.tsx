@@ -490,6 +490,26 @@ export default function CampaignDetail() {
     }
   }
 
+  // daily-ops pacing change (works live on a running blast; operators allowed)
+  async function savePacing(value: string) {
+    const v = value.trim();
+    if (v !== "" && (!Number.isFinite(Number(v)) || Number(v) < 1)) {
+      setError("Pacing must be a number of 1 or more, or empty for full speed");
+      return;
+    }
+    setError("");
+    try {
+      await api(`/campaigns/${id}/pacing`, {
+        method: "POST",
+        body: JSON.stringify({ pacingPerMinute: v === "" ? null : Number(v) }),
+      });
+      setMsg(v === "" ? "Pace set to full speed" : `Pace set to ${v}/min`);
+      load();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+
   async function schedule() {
     if (!form.scheduleAt) { setError("Pick a schedule time first"); return; }
     if (nothingToDial) {
@@ -688,7 +708,34 @@ export default function CampaignDetail() {
                 <tr><td style={{ color: "var(--text-dim)", width: 160 }}>Message</td><td><b>{campaign.title}</b><div style={{ fontSize: 12, color: "var(--text-dim)" }}>{campaign.body}</div></td></tr>
                 <tr><td style={{ color: "var(--text-dim)" }}>Leads</td><td>{targetAll ? "🌐 All active subscribers" : segmentIds.length === 0 ? <span className="badge amber">none — nothing to dial</span> : segmentIds.map((sid) => segments.find((s) => s.id === sid)?.name ?? "…").join(" + ")}{segmentIds.length > 1 && <span className="badge purple" style={{ marginLeft: 8 }}>{mixStrategy === "mixed" ? "mixed evenly" : mixStrategy === "sequential" ? "one after another" : "zone-wise"}</span>}</td></tr>
                 <tr><td style={{ color: "var(--text-dim)" }}>Audience</td><td>{audience === null ? "…" : `${audience.toLocaleString()} leads`}</td></tr>
-                <tr><td style={{ color: "var(--text-dim)" }}>Pacing</td><td>{campaign.pacingPerMinute ? `${campaign.pacingPerMinute} / minute` : "Full speed"}</td></tr>
+                <tr>
+                  <td style={{ color: "var(--text-dim)" }}>Pacing (sends/min)</td>
+                  <td>
+                    {canOperate ? (
+                      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+                        <input
+                          type="number"
+                          min={1}
+                          style={{ width: 110 }}
+                          placeholder="full speed"
+                          value={pacing}
+                          onChange={(e) => setPacing(e.target.value)}
+                        />
+                        {[60, 300, 600, 1200, 3000].map((p) => (
+                          <button key={p} type="button" className={"btn small " + (pacing === String(p) ? "" : "secondary")}
+                            onClick={() => { setPacing(String(p)); savePacing(String(p)); }}>{p}</button>
+                        ))}
+                        <button type="button" className="btn small secondary" onClick={() => { setPacing(""); savePacing(""); }}>Max</button>
+                        <button type="button" className="btn small" onClick={() => savePacing(pacing)}>Set</button>
+                        {(campaign.status === "sending" || campaign.status === "paused") && (
+                          <span style={{ fontSize: 11, color: "var(--text-dim)" }}>applies live</span>
+                        )}
+                      </div>
+                    ) : (
+                      campaign.pacingPerMinute ? `${campaign.pacingPerMinute} / minute` : "Full speed"
+                    )}
+                  </td>
+                </tr>
                 <tr><td style={{ color: "var(--text-dim)" }}>A/B test</td><td>{campaign.abConfig?.enabled ? "On — 50/50" : "Off"}</td></tr>
                 {report && report.revenue.conversions > 0 && (
                   <tr><td style={{ color: "var(--text-dim)" }}>Revenue</td><td>₹{report.revenue.amount.toLocaleString()} from {report.revenue.conversions} conversions</td></tr>

@@ -314,6 +314,28 @@ export class CampaignsController {
     return { ok: true, status: "sending" };
   }
 
+  /**
+   * Adjust send pace — a daily-ops action (operators allowed), so it lives on
+   * its own route instead of the content PATCH. Applies live to a running
+   * blast. Body: { pacingPerMinute: number | null } (null/0 = full speed).
+   */
+  @Post(":id/pacing")
+  async setPacing(
+    @CurrentUser() user: AuthUser,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() body: { pacingPerMinute: number | null },
+  ) {
+    const campaign = await this.db(user).campaign.findUnique({ where: { id } });
+    if (!campaign) throw new NotFoundException("Campaign not found");
+    const raw = body?.pacingPerMinute;
+    if (raw !== null && raw !== undefined && (!Number.isFinite(raw) || raw < 1)) {
+      throw new BadRequestException("Pacing must be a number ≥ 1, or empty for full speed");
+    }
+    await this.runner.updatePacing(id, raw ?? null);
+    await this.audit(user, "campaign.pacing", id);
+    return { ok: true, pacingPerMinute: raw ?? null };
+  }
+
   /** Vicidial-style live monitor: counters + rate + ETA, polled by the Basic view. */
   @Get(":id/live")
   async live(@CurrentUser() user: AuthUser, @Param("id", ParseUUIDPipe) id: string) {

@@ -2,15 +2,15 @@ import { NavLink, Outlet, useNavigate } from "react-router-dom";
 import { clearSession, getUser } from "../api";
 
 const NAV = [
-  { to: "/", label: "Overview", icon: "▦", end: true },
-  { to: "/properties", label: "Properties", icon: "🌐" },
-  { to: "/subscribers", label: "Subscribers", icon: "👥" },
-  { to: "/segments", label: "Segments", icon: "🎯" },
-  { to: "/campaigns", label: "Campaigns", icon: "📣" },
-  { to: "/automations", label: "Automations", icon: "🔁" },
-  { to: "/updates", label: "Updates", icon: "⬇" },
-  { to: "/troubleshoot", label: "Troubleshoot", icon: "🩺" },
-  { to: "/settings", label: "Settings", icon: "⚙" },
+  { to: "/", label: "Overview", icon: "▦", end: true, page: "overview" },
+  { to: "/properties", label: "Properties", icon: "🌐", page: "properties" },
+  { to: "/subscribers", label: "Subscribers", icon: "👥", page: "subscribers" },
+  { to: "/segments", label: "Segments", icon: "🎯", page: "segments" },
+  { to: "/campaigns", label: "Campaigns", icon: "📣", page: "campaigns" },
+  { to: "/automations", label: "Automations", icon: "🔁", page: "automations" },
+  { to: "/updates", label: "Updates", icon: "⬇", page: "updates" },
+  { to: "/troubleshoot", label: "Troubleshoot", icon: "🩺", page: "troubleshoot" },
+  { to: "/settings", label: "Settings", icon: "⚙", page: "settings" },
 ];
 
 // client-role users get a read-only portal with a reduced menu
@@ -23,7 +23,10 @@ const ADMIN_ONLY = ["/troubleshoot"];
 export default function Layout() {
   const user = getUser();
   const isAdmin = user?.role === "admin" || user?.role === "manager";
+  const allowed = (user as any)?.allowedPages as string[] | undefined;
   const nav = NAV.filter((n) => {
+    // per-user page whitelist (admins are never restricted) takes precedence
+    if (user?.role !== "admin" && allowed && allowed.length > 0 && !allowed.includes(n.page)) return false;
     if (user?.role === "client") return CLIENT_NAV.includes(n.to);
     if (user?.role === "operator") return OPERATOR_NAV.includes(n.to);
     return isAdmin || !ADMIN_ONLY.includes(n.to);

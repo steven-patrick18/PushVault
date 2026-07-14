@@ -90,6 +90,9 @@ model User {
   passwordHash String    @map("password_hash")
   role         UserRole
   propertyIds  String[]  @map("property_ids") @db.Uuid
+  // optional per-page access whitelist (empty = every page the role allows).
+  // Lets an admin restrict a user to specific sections beyond the coarse role.
+  allowedPages String[]  @default([]) @map("allowed_pages")
   lastLoginAt  DateTime? @map("last_login_at") @db.Timestamptz()
   createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt    DateTime? @updatedAt @map("updated_at") @db.Timestamptz()

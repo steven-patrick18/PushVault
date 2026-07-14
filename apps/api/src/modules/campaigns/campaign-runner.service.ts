@@ -41,6 +41,28 @@ export class CampaignRunnerService implements OnModuleInit {
   // generation token per campaign: pause/resume/dispatch bump it so stale pool
   // tasks from a previous run self-cancel (no double sends, no stale pacing)
   private readonly epochs = new Map<string, number>();
+  // active pacing limiter per campaign so pacing can be changed live mid-blast
+  private readonly limiters = new Map<string, RateLimiter>();
+
+  /**
+   * Change a campaign's send pace. Persists it and, if the blast is live,
+   * updates the running limiter so the new speed takes effect immediately.
+   * Operators use this from the Basic tab for daily ops.
+   */
+  async updatePacing(campaignId: string, perMinute: number | null): Promise<void> {
+    const campaign = await this.prisma.system.campaign.findUnique({
+      where: { id: campaignId },
+      select: { tenantId: true },
+    });
+    if (!campaign) throw new BadRequestException("Campaign not found");
+    const value = perMinute && perMinute > 0 ? Math.floor(perMinute) : null;
+    await this.prisma.forTenant(campaign.tenantId).campaign.update({
+      where: { id: campaignId },
+      data: { pacingPerMinute: value },
+    });
+    const live = this.limiters.get(campaignId);
+    if (live) live.setPerMinute(value ?? 0);
+  }
 
   private bumpEpoch(campaignId: string): number {
     const next = (this.epochs.get(campaignId) ?? 0) + 1;
@@ -182,6 +204,7 @@ export class CampaignRunnerService implements OnModuleInit {
     this.bumpEpoch(campaignId); // invalidate every task already in the pool
     this.remaining.delete(campaignId);
     this.consumedMap.delete(campaignId);
+    this.limiters.delete(campaignId);
     await this.prisma.forTenant(campaign.tenantId).campaign.update({
       where: { id: campaignId },
       data: { status: "paused" },
@@ -218,9 +241,10 @@ export class CampaignRunnerService implements OnModuleInit {
 
     const { basePayload, variantBPayload } = this.buildPayloads(campaign);
     const vapid = this.vapidOf(campaign.property);
-    const limiter = campaign.pacingPerMinute
-      ? new RateLimiter(60_000 / campaign.pacingPerMinute)
-      : null;
+    // always create + register a limiter (0 interval = full speed) so pacing
+    // can be adjusted live from the Basic tab, even from full speed
+    const limiter = new RateLimiter(campaign.pacingPerMinute ? 60_000 / campaign.pacingPerMinute : 0);
+    this.limiters.set(campaign.id, limiter);
 
     this.remaining.set(campaignId, Number.MAX_SAFE_INTEGER);
     let cursor: string | undefined;
@@ -468,9 +492,10 @@ export class CampaignRunnerService implements OnModuleInit {
 
     const { basePayload, variantBPayload, ab } = this.buildPayloads(campaign);
     const vapid = this.vapidOf(campaign.property);
-    const limiter = campaign.pacingPerMinute
-      ? new RateLimiter(60_000 / campaign.pacingPerMinute)
-      : null;
+    // always create + register a limiter (0 interval = full speed) so pacing
+    // can be adjusted live from the Basic tab, even from full speed
+    const limiter = new RateLimiter(campaign.pacingPerMinute ? 60_000 / campaign.pacingPerMinute : 0);
+    this.limiters.set(campaign.id, limiter);
 
     const capDay = campaign.property.frequencyCapPerDay;
     const capWeek = campaign.property.frequencyCapPerWeek;
@@ -625,6 +650,7 @@ export class CampaignRunnerService implements OnModuleInit {
   private async finalize(campaignId: string, tenantId: string) {
     this.remaining.delete(campaignId);
     this.consumedMap.delete(campaignId);
+    this.limiters.delete(campaignId);
     const db = this.prisma.forTenant(tenantId);
     const current = await db.campaign.findUnique({ where: { id: campaignId }, select: { status: true } });
     if (current?.status === "paused") return; // don't overwrite a pause

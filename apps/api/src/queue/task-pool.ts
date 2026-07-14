@@ -44,9 +44,15 @@ export function sleep(ms: number): Promise<void> {
 export class RateLimiter {
   private nextAt = 0;
 
-  constructor(private readonly intervalMs: number) {}
+  constructor(private intervalMs: number) {}
+
+  /** Live-adjust the rate (sends/min); 0 or less = full speed. */
+  setPerMinute(perMinute: number): void {
+    this.intervalMs = perMinute > 0 ? 60_000 / perMinute : 0;
+  }
 
   async wait(): Promise<void> {
+    if (this.intervalMs <= 0) return; // full speed
     const now = Date.now();
     const reserved = Math.max(this.nextAt, now);
     this.nextAt = reserved + this.intervalMs;

@@ -9,6 +9,7 @@ import {
 } from "@nestjs/common";
 import { JwtService } from "@nestjs/jwt";
 import type { Request } from "express";
+import { pageForApiPath } from "./pages";
 
 export interface AuthUser {
   userId: string;
@@ -17,11 +18,13 @@ export interface AuthUser {
   email: string;
   /** role=client: the only properties this user may see (empty = none) */
   propertyIds: string[];
+  /** per-page access whitelist (empty = all pages the role allows) */
+  allowedPages: string[];
 }
 
 // operator = daily-ops role: may run campaign lifecycle actions, nothing else
 const OPERATOR_ALLOWED_WRITES =
-  /^\/api\/v1\/campaigns\/[0-9a-f-]{36}\/(send-now|pause|resume|cancel|test-send)$/;
+  /^\/api\/v1\/campaigns\/[0-9a-f-]{36}\/(send-now|pause|resume|cancel|test-send|pacing)$/;
 
 /** Prisma `where` fragment limiting a client-role user to their properties. */
 export function propertyScope(user: AuthUser): Record<string, unknown> {
@@ -63,7 +66,18 @@ export class JwtAuthGuard implements CanActivate {
       role: payload.role,
       email: payload.email,
       propertyIds: payload.propertyIds ?? [],
+      allowedPages: payload.allowedPages ?? [],
     } satisfies AuthUser;
+    // per-page access whitelist: if set, block any request to a page the user
+    // wasn't granted (admins are never page-restricted). Only narrows access.
+    const allowedPages: string[] = payload.allowedPages ?? [];
+    if (payload.role !== "admin" && allowedPages.length > 0) {
+      const fullPath = (req.baseUrl ?? "") + (req.path ?? "");
+      const page = pageForApiPath(fullPath);
+      if (page && !allowedPages.includes(page)) {
+        throw new ForbiddenException("Your account doesn't have access to this section");
+      }
+    }
     // client portal is read-only
     if (payload.role === "client" && req.method !== "GET") {
       throw new ForbiddenException("Client accounts are read-only");

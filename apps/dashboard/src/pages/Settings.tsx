@@ -14,6 +14,8 @@ interface User {
   id: string;
   email: string;
   role: string;
+  propertyIds?: string[];
+  allowedPages?: string[];
   lastLoginAt: string | null;
   createdAt: string;
 }
@@ -55,10 +57,14 @@ export default function Settings() {
   const [rates, setRates] = useState({ per_send: "0", per_click: "0", currency: "INR" });
   const [gads, setGads] = useState<any>(null);
   const [gadsSaving, setGadsSaving] = useState(false);
+  const [allPages, setAllPages] = useState<{ key: string; label: string }[]>([]);
+  const [editAccess, setEditAccess] = useState<User | null>(null);
+  const [accessDraft, setAccessDraft] = useState<{ role: string; allowedPages: string[]; propertyIds: string[] }>({ role: "manager", allowedPages: [], propertyIds: [] });
 
   const load = () => {
     api<Tenant>("/tenant").then(setTenant).catch((e) => setError(e.message));
     api<User[]>("/users").then(setUsers).catch(() => {});
+    api<{ key: string; label: string }[]>("/pages").then(setAllPages).catch(() => {});
     api<AuditRow[]>("/audit").then(setAudit).catch(() => {});
     api<Billing>("/billing").then((b) => {
       setBilling(b);
@@ -91,6 +97,31 @@ export default function Settings() {
     if (!confirm("Remove this user?")) return;
     try {
       await api(`/users/${id}`, { method: "DELETE" });
+      load();
+    } catch (e: any) {
+      setError(e.message);
+    }
+  }
+
+  function openAccess(u: User) {
+    setEditAccess(u);
+    setAccessDraft({ role: u.role, allowedPages: u.allowedPages ?? [], propertyIds: u.propertyIds ?? [] });
+    setError("");
+  }
+
+  async function saveAccess() {
+    if (!editAccess) return;
+    try {
+      await api(`/users/${editAccess.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          role: accessDraft.role,
+          allowedPages: accessDraft.allowedPages,
+          propertyIds: accessDraft.propertyIds,
+        }),
+      });
+      setEditAccess(null);
+      setMsg("Access updated — the user must sign out and back in for it to take effect.");
       load();
     } catch (e: any) {
       setError(e.message);
@@ -344,14 +375,20 @@ export default function Settings() {
 
       <div className="panel">
         <div className="flex-between">
-          <h3>Team</h3>
+          <h3>Team &amp; access</h3>
           <button className="btn secondary small" onClick={() => setShowAddUser(true)}>+ Add user</button>
+        </div>
+        <div className="page-sub">
+          Give each teammate a role and, optionally, restrict them to specific pages. Roles set what
+          they can do (admin/manager = full, operator = run campaigns, client = read-only portal);
+          page access narrows which sections they see.
         </div>
         <table>
           <thead>
             <tr>
               <th>Email</th>
               <th>Role</th>
+              <th>Pages</th>
               <th>Last login</th>
               <th></th>
             </tr>
@@ -363,10 +400,16 @@ export default function Settings() {
                 <td>
                   <span className="badge purple">{u.role}</span>
                 </td>
+                <td style={{ fontSize: 12, color: "var(--text-dim)" }}>
+                  {(u.allowedPages?.length ?? 0) === 0
+                    ? "All (role default)"
+                    : u.allowedPages!.map((p) => allPages.find((a) => a.key === p)?.label ?? p).join(", ")}
+                </td>
                 <td style={{ fontSize: 12 }}>
                   {u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : "never"}
                 </td>
-                <td>
+                <td style={{ whiteSpace: "nowrap" }}>
+                  <button className="btn secondary small" onClick={() => openAccess(u)}>Access</button>{" "}
                   <button className="btn secondary small" onClick={() => removeUser(u.id)}>🗑</button>
                 </td>
               </tr>
@@ -374,6 +417,65 @@ export default function Settings() {
           </tbody>
         </table>
       </div>
+
+      {editAccess && (
+        <div className="modal-backdrop" onClick={() => setEditAccess(null)}>
+          <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 460 }}>
+            <h2>Access — {editAccess.email}</h2>
+            <label>Role (what they can do)</label>
+            <select value={accessDraft.role} onChange={(e) => setAccessDraft({ ...accessDraft, role: e.target.value })}>
+              <option value="admin">Admin — full control</option>
+              <option value="manager">Manager — full except billing/plan</option>
+              <option value="operator">Operator — run campaigns only</option>
+              <option value="client">Client — read-only portal</option>
+            </select>
+
+            {accessDraft.role === "client" && (
+              <>
+                <label style={{ marginTop: 12 }}>Client can see these properties</label>
+                <div style={{ display: "flex", flexDirection: "column", gap: 6, maxHeight: 140, overflow: "auto" }}>
+                  {properties.map((p) => (
+                    <label key={p.id} style={{ display: "flex", gap: 8, fontWeight: 400 }}>
+                      <input type="checkbox" checked={accessDraft.propertyIds.includes(p.id)}
+                        onChange={(e) => setAccessDraft({
+                          ...accessDraft,
+                          propertyIds: e.target.checked ? [...accessDraft.propertyIds, p.id] : accessDraft.propertyIds.filter((x) => x !== p.id),
+                        })} />
+                      {p.name}
+                    </label>
+                  ))}
+                </div>
+              </>
+            )}
+
+            <label style={{ marginTop: 12 }}>Pages this user can open</label>
+            <div className="page-sub" style={{ marginTop: 0 }}>
+              Leave all unchecked to use the role's default menu. Checking specific pages restricts
+              them to only those. (Admins always see everything.)
+            </div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+              {allPages.map((p) => (
+                <label key={p.key} style={{ display: "flex", gap: 8, fontWeight: 400 }}>
+                  <input type="checkbox" checked={accessDraft.allowedPages.includes(p.key)}
+                    onChange={(e) => setAccessDraft({
+                      ...accessDraft,
+                      allowedPages: e.target.checked ? [...accessDraft.allowedPages, p.key] : accessDraft.allowedPages.filter((x) => x !== p.key),
+                    })} />
+                  {p.label}
+                </label>
+              ))}
+            </div>
+
+            <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
+              <button className="btn" onClick={saveAccess}>Save access</button>
+              <button className="btn secondary" onClick={() => setEditAccess(null)}>Cancel</button>
+            </div>
+            <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 10 }}>
+              The user must sign out and back in for access changes to apply.
+            </div>
+          </div>
+        </div>
+      )}
 
       {showAddUser && (
         <div className="modal-backdrop" onClick={() => setShowAddUser(false)}>

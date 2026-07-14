@@ -14,7 +14,7 @@ export function clearSession() {
   localStorage.removeItem("pv_user");
 }
 
-export function getUser(): { email: string; role: string; tenantName: string } | null {
+export function getUser(): { email: string; role: string; tenantName: string; allowedPages?: string[] } | null {
   const raw = localStorage.getItem("pv_user");
   if (!raw) return null;
   try {

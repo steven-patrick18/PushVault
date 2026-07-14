@@ -5,6 +5,7 @@ import {
   Delete,
   ForbiddenException,
   Get,
+  NotFoundException,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -16,6 +17,7 @@ import { PrismaService } from "../../infra/prisma.service";
 import { AuthUser, CurrentUser, JwtAuthGuard } from "../../common/auth.guard";
 import { hashSecret } from "../../common/crypto";
 import { PLAN_LABELS, PLAN_QUOTAS, monthStart, nextMonthStart } from "../../common/plans";
+import { PAGES, PAGE_KEYS } from "../../common/pages";
 
 class UpdateTenantDto {
   @IsOptional() @IsString() brandName?: string;
@@ -49,6 +51,27 @@ class CreateUserDto {
   @IsArray()
   @IsUUID(undefined, { each: true })
   propertyIds?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  allowedPages?: string[];
+}
+
+class UpdateUserAccessDto {
+  @IsOptional()
+  @IsIn(["admin", "manager", "operator", "client"])
+  role?: "admin" | "manager" | "operator" | "client";
+
+  @IsOptional()
+  @IsArray()
+  @IsUUID(undefined, { each: true })
+  propertyIds?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  allowedPages?: string[];
 }
 
 @Controller()
@@ -112,9 +135,16 @@ export class SettingsController {
   users(@CurrentUser() user: AuthUser) {
     this.assertStaff(user);
     return this.prisma.forTenant(user.tenantId).user.findMany({
-      select: { id: true, email: true, role: true, propertyIds: true, lastLoginAt: true, createdAt: true },
+      select: { id: true, email: true, role: true, propertyIds: true, allowedPages: true, lastLoginAt: true, createdAt: true },
       orderBy: { createdAt: "asc" },
     });
+  }
+
+  /** The pages an admin can grant per user (for the Access panel). */
+  @Get("pages")
+  pages(@CurrentUser() user: AuthUser) {
+    this.assertStaff(user);
+    return PAGES.map((p) => ({ key: p.key, label: p.label }));
   }
 
   @Post("users")
@@ -123,6 +153,7 @@ export class SettingsController {
     if (dto.role === "client" && !dto.propertyIds?.length) {
       throw new BadRequestException("Client users need at least one property assigned");
     }
+    const allowedPages = (dto.allowedPages ?? []).filter((p) => PAGE_KEYS.includes(p));
     const db = this.prisma.forTenant(user.tenantId);
     const created = await db.user.create({
       data: {
@@ -131,8 +162,9 @@ export class SettingsController {
         passwordHash: hashSecret(dto.password),
         role: dto.role,
         propertyIds: dto.role === "client" ? (dto.propertyIds ?? []) : [],
+        allowedPages,
       },
-      select: { id: true, email: true, role: true, propertyIds: true },
+      select: { id: true, email: true, role: true, propertyIds: true, allowedPages: true },
     });
     await db.auditLog.create({
       data: {
@@ -145,6 +177,46 @@ export class SettingsController {
       },
     });
     return created;
+  }
+
+  /** Update a user's role, property scope, and per-page access (admin only). */
+  @Patch("users/:id")
+  async updateUserAccess(
+    @CurrentUser() user: AuthUser,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() dto: UpdateUserAccessDto,
+  ) {
+    if (user.role !== "admin") throw new ForbiddenException("Only admins can change access");
+    const db = this.prisma.forTenant(user.tenantId);
+    const target = await db.user.findUnique({ where: { id } });
+    if (!target) throw new NotFoundException("User not found");
+    if (id === user.userId && dto.role && dto.role !== "admin") {
+      throw new BadRequestException("You can't remove your own admin role");
+    }
+    const role = dto.role ?? target.role;
+    const data: any = {};
+    if (dto.role) data.role = dto.role;
+    if (dto.propertyIds) data.propertyIds = role === "client" ? dto.propertyIds : [];
+    if (dto.allowedPages) data.allowedPages = dto.allowedPages.filter((p) => PAGE_KEYS.includes(p));
+    if (role === "client" && (data.propertyIds ?? target.propertyIds).length === 0) {
+      throw new BadRequestException("Client users need at least one property assigned");
+    }
+    const updated = await db.user.update({
+      where: { id },
+      data,
+      select: { id: true, email: true, role: true, propertyIds: true, allowedPages: true },
+    });
+    await db.auditLog.create({
+      data: {
+        tenantId: user.tenantId,
+        userId: user.userId,
+        action: "user.update_access",
+        entityType: "user",
+        entityId: id,
+        after: { role: updated.role, allowedPages: updated.allowedPages } as any,
+      },
+    });
+    return { ...updated, note: "The user must sign out and back in for changes to take effect." };
   }
 
   @Delete("users/:id")
