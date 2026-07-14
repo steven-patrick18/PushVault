@@ -128,16 +128,24 @@ export default function SegmentDetail() {
   }
 
   async function removeMember(subscriberId: string) {
-    await api(`/segments/${id}/members/${subscriberId}`, { method: "DELETE" });
-    load();
-    loadMembers();
+    try {
+      await api(`/segments/${id}/members/${subscriberId}`, { method: "DELETE" });
+      load();
+      loadMembers();
+    } catch (e: any) {
+      setError(e.message);
+    }
   }
 
   async function addMember(subscriberId: string) {
-    await api(`/segments/${id}/members`, { method: "POST", body: JSON.stringify({ subscriber_id: subscriberId }) });
-    load();
-    loadMembers();
-    loadCandidates();
+    try {
+      await api(`/segments/${id}/members`, { method: "POST", body: JSON.stringify({ subscriber_id: subscriberId }) });
+      load();
+      loadMembers();
+      loadCandidates();
+    } catch (e: any) {
+      setError(e.message);
+    }
   }
 
   const loadCandidates = useCallback(() => {
@@ -150,8 +158,12 @@ export default function SegmentDetail() {
 
   async function remove() {
     if (!confirm("Delete this segment? Campaigns using it will refuse to send.")) return;
-    await api(`/segments/${id}`, { method: "DELETE" });
-    navigate("/segments");
+    try {
+      await api(`/segments/${id}`, { method: "DELETE" });
+      navigate("/segments");
+    } catch (e: any) {
+      setError(e.message);
+    }
   }
 
   if (!segment) return <div className="page-sub">{error || "Loading…"}</div>;

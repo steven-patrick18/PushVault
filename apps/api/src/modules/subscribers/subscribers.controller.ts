@@ -8,7 +8,7 @@ import {
   UseGuards,
 } from "@nestjs/common";
 import { PrismaService } from "../../infra/prisma.service";
-import { AuthUser, CurrentUser, JwtAuthGuard, propertyScope } from "../../common/auth.guard";
+import { assertPropertyAccess, AuthUser, CurrentUser, JwtAuthGuard, propertyScope } from "../../common/auth.guard";
 import {
   SubscriberFilterParams,
   buildSubscriberWhere,
@@ -96,9 +96,10 @@ export class SubscribersController {
   /** Distinct values for the filter dropdowns. */
   @Get("facets")
   async facets(@CurrentUser() user: AuthUser, @Query("property_id") propertyId?: string) {
+    if (propertyId) assertPropertyAccess(user, propertyId);
     const db = this.prisma.forTenant(user.tenantId);
-    const base: any = { ...propertyScope(user) };
-    if (propertyId) base.propertyId = propertyId;
+    // client scope spread LAST so property_id can't override it
+    const base: any = { ...(propertyId ? { propertyId } : {}), ...propertyScope(user) };
 
     const distinct = async (field: string) => {
       const rows = await db.subscriber.groupBy({
@@ -125,16 +126,16 @@ export class SubscribersController {
   /** Growth stats for the overview: new subscribers per day + by campaign. */
   @Get("stats")
   async stats(@CurrentUser() user: AuthUser, @Query("property_id") propertyId?: string) {
+    if (propertyId) assertPropertyAccess(user, propertyId);
     const db = this.prisma.forTenant(user.tenantId);
     const since = new Date(Date.now() - 30 * 86400_000);
-    const where: any = { subscribedAt: { gte: since }, ...propertyScope(user) };
-    if (propertyId) where.propertyId = propertyId;
+    const where: any = { subscribedAt: { gte: since }, ...(propertyId ? { propertyId } : {}), ...propertyScope(user) };
 
     const [recent, byCampaign] = await Promise.all([
       db.subscriber.findMany({ where, select: { subscribedAt: true } }),
       db.subscriber.groupBy({
         by: ["utmCampaign"],
-        where: { ...propertyScope(user), ...(propertyId ? { propertyId } : {}) },
+        where: { ...(propertyId ? { propertyId } : {}), ...propertyScope(user) },
         _count: { _all: true },
         orderBy: { _count: { utmCampaign: "desc" } },
         take: 8,

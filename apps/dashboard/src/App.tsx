@@ -13,6 +13,7 @@ import Campaigns from "./pages/Campaigns";
 import CampaignDetail from "./pages/CampaignDetail";
 import Automations from "./pages/Automations";
 import Updates from "./pages/Updates";
+import Troubleshoot from "./pages/Troubleshoot";
 import Placeholder from "./pages/Placeholder";
 
 function RequireAuth({ children }: { children: React.ReactElement }) {
@@ -41,6 +42,7 @@ export default function App() {
         <Route path="campaigns/:id" element={<CampaignDetail />} />
         <Route path="automations" element={<Automations />} />
         <Route path="updates" element={<Updates />} />
+        <Route path="troubleshoot" element={<Troubleshoot />} />
         <Route path="settings" element={<Settings />} />
       </Route>
       <Route path="*" element={<Navigate to="/" replace />} />

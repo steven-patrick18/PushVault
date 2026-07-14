@@ -29,13 +29,27 @@ export class PublicService {
     private readonly membership: MembershipService,
   ) {}
 
-  /** Resolve property by key and validate the request Origin against its domains. */
-  private async resolveProperty(propertyKey: string, origin: string | undefined) {
+  /**
+   * Resolve property by key and validate the request Origin against its
+   * domains. `requireOrigin` (used for state-changing endpoints) rejects a
+   * missing Origin outright: the property_key is public (it ships in every
+   * page's snippet), so the Origin allowlist is the real access control — and
+   * only a real browser sends Origin. A curl/script with no Origin must not be
+   * allowed to write with just the public key.
+   */
+  private async resolveProperty(
+    propertyKey: string,
+    origin: string | undefined,
+    requireOrigin = false,
+  ) {
     const property = await this.prisma.system.property.findUnique({
       where: { propertyKey },
     });
     if (!property || property.status !== "active") {
       throw new NotFoundException("Unknown property");
+    }
+    if (requireOrigin && !origin) {
+      throw new ForbiddenException("Missing Origin — requests must come from the property's site");
     }
     if (origin) {
       let host: string;
@@ -55,14 +69,25 @@ export class PublicService {
     return property;
   }
 
+  // short-lived cache of active properties so Caddy's on-demand-TLS "ask"
+  // (one call per unknown SNI) and every hosted-page render don't table-scan
+  private hostCache: { at: number; rows: any[] } | null = null;
+  private async activeProperties() {
+    const now = Date.now();
+    if (!this.hostCache || now - this.hostCache.at > 30_000) {
+      const rows = await this.prisma.system.property.findMany({ where: { status: "active" } });
+      this.hostCache = { at: now, rows };
+    }
+    return this.hostCache.rows;
+  }
+
   /** Find a property by one of its registered domains (bare host match). */
   async propertyByHost(host: string | undefined) {
     if (!host) return null;
-    const bare = host.toLowerCase().split(":")[0];
-    // exact host match, then bare hostname (drop port) — same rule as origin check
-    const all = await this.prisma.system.property.findMany({ where: { status: "active" } });
+    const bare = host.toLowerCase().split(":")[0].replace(/\.$/, ""); // drop port + trailing dot
+    const all = await this.activeProperties();
     return (
-      all.find((p) => p.domains.some((d) => d === host || d === bare)) ?? null
+      all.find((p: any) => p.domains.some((d: string) => d === host || d === bare)) ?? null
     );
   }
 
@@ -76,10 +101,13 @@ export class PublicService {
   }
 
   async subscribe(input: SubscribeInput, origin: string | undefined, ip: string | undefined, userAgent: string | undefined) {
-    const property = await this.resolveProperty(input.property_key, origin);
+    const property = await this.resolveProperty(input.property_key, origin, true);
     const { endpoint, keys } = input.subscription ?? ({} as any);
     if (!endpoint || !keys?.p256dh || !keys?.auth) {
       throw new BadRequestException("Invalid push subscription");
+    }
+    if (!isValidPushEndpoint(endpoint)) {
+      throw new BadRequestException("Invalid push endpoint");
     }
 
     const ua = new UAParser(userAgent ?? "");
@@ -148,7 +176,7 @@ export class PublicService {
   }
 
   async unsubscribe(propertyKey: string, endpoint: string, origin: string | undefined) {
-    const property = await this.resolveProperty(propertyKey, origin);
+    const property = await this.resolveProperty(propertyKey, origin, true);
     const db = this.prisma.forTenant(property.tenantId);
     const sub = await db.subscriber.findUnique({
       where: { propertyId_endpoint: { propertyId: property.id, endpoint } },
@@ -181,7 +209,13 @@ export class PublicService {
     let tenantId = input.tenantId;
     let propertyId = input.propertyId;
     if (!tenantId || !propertyId) {
-      const property = await this.resolveProperty(input.property_key!, origin);
+      // pixel conversions come from the browser (require Origin); webhook
+      // conversions are pre-authenticated by X-Api-Key and pass tenantId
+      const property = await this.resolveProperty(
+        input.property_key!,
+        origin,
+        input.source === "pixel",
+      );
       tenantId = property.tenantId;
       propertyId = property.id;
     }
@@ -218,23 +252,57 @@ export class PublicService {
 
   /** Page discovery: the snippet beacons each page it loads on. */
   async trackPageview(propertyKey: string, path: string, origin: string | undefined) {
-    const property = await this.resolveProperty(propertyKey, origin);
+    const property = await this.resolveProperty(propertyKey, origin, true);
     const cleanPath = path.slice(0, 500).split("?")[0] || "/";
     const db = this.prisma.forTenant(property.tenantId);
-    await db.pagePath.upsert({
+    const existing = await db.pagePath.findUnique({
       where: { propertyId_path: { propertyId: property.id, path: cleanPath } },
-      create: {
-        tenantId: property.tenantId,
-        propertyId: property.id,
-        path: cleanPath,
-      },
-      update: { views: { increment: 1 }, lastSeenAt: new Date() },
+      select: { id: true },
+    });
+    if (existing) {
+      await db.pagePath.update({
+        where: { id: existing.id },
+        data: { views: { increment: 1 }, lastSeenAt: new Date() },
+      });
+      return { ok: true };
+    }
+    // cap distinct paths per property so pageview spam can't grow the table
+    // unbounded; real sites have far fewer than this many unique pages
+    const PAGE_CAP = 2000;
+    const count = await db.pagePath.count({ where: { propertyId: property.id } });
+    if (count >= PAGE_CAP) return { ok: true, capped: true };
+    await db.pagePath.create({
+      data: { tenantId: property.tenantId, propertyId: property.id, path: cleanPath },
     });
     return { ok: true };
   }
 
+  /**
+   * The call bridge must only dial numbers a tenant actually configured, never
+   * an arbitrary number an attacker puts in the URL (toll fraud). We resolve
+   * the referenced send → its campaign → and confirm the requested number is
+   * one of that campaign's registered call numbers.
+   */
+  async callNumberAllowed(sanitizedNumber: string, clickId: string | undefined): Promise<boolean> {
+    if (!sanitizedNumber || !clickId) return false;
+    if (!/^[0-9a-f-]{36}$/i.test(clickId)) return false; // must be a real send UUID
+    const send = await this.prisma.system.send.findUnique({
+      where: { id: clickId },
+      select: { campaignId: true },
+    });
+    if (!send?.campaignId) return false;
+    const campaign = await this.prisma.system.campaign.findUnique({
+      where: { id: send.campaignId },
+      select: { callNumbers: true },
+    });
+    if (!campaign) return false;
+    const norm = (s: string) => String(s).replace(/[^\d+]/g, "");
+    return (campaign.callNumbers ?? []).some((c) => norm(c) === sanitizedNumber);
+  }
+
   /** Idempotent click tracking, called by the service worker. */
   async trackClick(sendId: string) {
+    if (!/^[0-9a-f-]{36}$/i.test(sendId)) throw new NotFoundException("Unknown send");
     const send = await this.prisma.system.send.findUnique({ where: { id: sendId } });
     if (!send) throw new NotFoundException("Unknown send");
     if (send.clicked) return { ok: true, already: true };
@@ -261,4 +329,43 @@ export class PublicService {
     }
     return { ok: true };
   }
+}
+
+/**
+ * A push subscription endpoint must be an https URL on a real push service.
+ * Rejecting anything else stops table-flooding with junk endpoints and closes
+ * an SSRF vector (the endpoint is later POSTed to by the sender) — an attacker
+ * can't register `http://169.254.169.254/…` or `http://api:3000/…` as a "lead".
+ */
+export function isValidPushEndpoint(endpoint: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(endpoint);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== "https:") return false;
+  const host = url.hostname.toLowerCase();
+  // block obvious internal targets outright
+  if (
+    host === "localhost" ||
+    host.endsWith(".local") ||
+    host.endsWith(".internal") ||
+    /^\d+\.\d+\.\d+\.\d+$/.test(host) || // raw IPv4 (push services use hostnames)
+    host.includes(":") // raw IPv6
+  ) {
+    return false;
+  }
+  // known web-push hosts (FCM/Chrome, Mozilla, Apple, Windows/WNS, Edge)
+  const allow = [
+    "fcm.googleapis.com",
+    "updates.push.services.mozilla.com",
+    "push.services.mozilla.com",
+    "web.push.apple.com",
+    "notify.windows.com",
+    "wns2-",
+    ".notify.windows.com",
+    "push.apple.com",
+  ];
+  return allow.some((h) => host === h || host.endsWith(h) || host.includes(h));
 }

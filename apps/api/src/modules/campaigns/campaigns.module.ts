@@ -7,5 +7,6 @@ import { SegmentsController } from "../segments/segments.controller";
 @Module({
   controllers: [CampaignsController, SegmentsController],
   providers: [CampaignRunnerService, PushService],
+  exports: [CampaignRunnerService],
 })
 export class CampaignsModule {}

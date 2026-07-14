@@ -95,12 +95,21 @@ export class CampaignRunnerService implements OnModuleInit {
   armSchedule(campaignId: string, at: Date) {
     this.cancelSchedule(campaignId);
     const delay = Math.max(at.getTime() - Date.now(), 0);
+    // Node clamps setTimeout delays > ~24.86 days (2^31-1 ms) to 1 ms, which
+    // would fire a far-future / monthly schedule immediately (and, for a
+    // recurring campaign, loop forever re-blasting the audience). Cap each
+    // hop and re-arm; only actually fire once the wall clock has arrived.
+    const MAX = 2 ** 31 - 1;
     const timer = setTimeout(() => {
       this.scheduledTimers.delete(campaignId);
+      if (at.getTime() - Date.now() > 1000) {
+        this.armSchedule(campaignId, at); // still in the future — keep waiting
+        return;
+      }
       void this.fireScheduled(campaignId).catch((e) =>
         this.logger.error(`Scheduled dispatch failed for ${campaignId}: ${e.message}`),
       );
-    }, delay);
+    }, Math.min(delay, MAX));
     this.scheduledTimers.set(campaignId, timer);
   }
 
@@ -134,6 +143,9 @@ export class CampaignRunnerService implements OnModuleInit {
         imageUrl: campaign.imageUrl,
         clickUrl: campaign.clickUrl,
         actions: campaign.actions as any,
+        callNumbers: campaign.callNumbers,
+        callStrategy: campaign.callStrategy,
+        sourceDomain: campaign.sourceDomain,
         segmentId: campaign.segmentId,
         segmentIds: campaign.segmentIds,
         mixStrategy: campaign.mixStrategy,
@@ -148,7 +160,13 @@ export class CampaignRunnerService implements OnModuleInit {
       this.logger.error(`Occurrence dispatch failed: ${e.message}`),
     );
 
-    const next = nextOccurrence(campaign.scheduleAt ?? new Date(), rec);
+    // advance to the next occurrence strictly in the future — after downtime,
+    // fire at most one catch-up rather than one blast per missed period
+    let next = nextOccurrence(campaign.scheduleAt ?? new Date(), rec);
+    let guard = 0;
+    while (next.getTime() <= Date.now() && guard++ < 1000) {
+      next = nextOccurrence(next, rec);
+    }
     await db.campaign.update({ where: { id: campaign.id }, data: { scheduleAt: next } });
     this.armSchedule(campaign.id, next);
   }
@@ -178,13 +196,25 @@ export class CampaignRunnerService implements OnModuleInit {
       include: { property: true },
     });
     if (!campaign) throw new BadRequestException("Campaign not found");
-    if (!fromBoot && campaign.status !== "paused") {
+    // "failed" is resumable too — maintenance may have finalized a blast that
+    // still has queued rows; resuming re-drains them
+    if (!fromBoot && campaign.status !== "paused" && campaign.status !== "failed") {
       throw new BadRequestException(`Campaign is ${campaign.status}, only paused campaigns can resume`);
+    }
+    const db = this.prisma.forTenant(campaign.tenantId);
+    if (!fromBoot) {
+      // atomic (paused|failed) → sending so a double-clicked Resume can't double-enqueue
+      const claim = await db.campaign.updateMany({
+        where: { id: campaignId, status: { in: ["paused", "failed"] } },
+        data: { status: "sending" },
+      });
+      if (claim.count === 0) {
+        this.logger.warn(`Resume ignored for ${campaignId} — already resumed`);
+        return;
+      }
     }
     this.paused.delete(campaignId);
     const epoch = this.bumpEpoch(campaignId);
-    const db = this.prisma.forTenant(campaign.tenantId);
-    await db.campaign.update({ where: { id: campaignId }, data: { status: "sending" } });
 
     const { basePayload, variantBPayload } = this.buildPayloads(campaign);
     const vapid = this.vapidOf(campaign.property);
@@ -329,8 +359,14 @@ export class CampaignRunnerService implements OnModuleInit {
       .map((id) => segments.find((s) => s.id === id))
       .filter(Boolean) as typeof segments;
 
+    // segmented sends must materialize ids to interleave/dedup across segments.
+    // Cap the total so a pathological audience can't OOM the box; the targetAll
+    // path (the truly huge case) streams with a cursor and isn't affected.
+    const MAX_AUDIENCE = 500_000;
     const lists: { id: string; timezone: string | null }[][] = [];
+    let loaded = 0;
     for (const seg of ordered) {
+      if (loaded >= MAX_AUDIENCE) break;
       const rows = await db.subscriber.findMany({
         where: {
           ...segmentAudienceWhere(seg.criteria as SegmentCriteria),
@@ -339,8 +375,15 @@ export class CampaignRunnerService implements OnModuleInit {
         },
         select: { id: true, timezone: true },
         orderBy: { id: "asc" },
+        take: MAX_AUDIENCE - loaded,
       });
+      loaded += rows.length;
       lists.push(rows);
+    }
+    if (loaded >= MAX_AUDIENCE) {
+      this.logger.warn(
+        `Campaign ${campaign.id} audience capped at ${MAX_AUDIENCE} — split very large segments across multiple campaigns`,
+      );
     }
 
     const seen = new Set<string>();
@@ -402,10 +445,11 @@ export class CampaignRunnerService implements OnModuleInit {
     }
 
     const db = this.prisma.forTenant(campaign.tenantId);
-    this.paused.delete(campaignId);
-    const epoch = this.bumpEpoch(campaignId);
-    await db.campaign.update({
-      where: { id: campaign.id },
+    // Atomic claim: only one caller can move the campaign draft/scheduled →
+    // sending. A double-clicked Send Now (or two operators at once) makes the
+    // loser's updateMany match 0 rows, so we abort instead of double-blasting.
+    const claim = await db.campaign.updateMany({
+      where: { id: campaign.id, status: { in: ["draft", "scheduled"] } },
       data: {
         status: "sending",
         startedAt: new Date(),
@@ -415,6 +459,12 @@ export class CampaignRunnerService implements OnModuleInit {
         totalExpiredPruned: 0,
       },
     });
+    if (claim.count === 0) {
+      this.logger.warn(`Dispatch ignored for ${campaignId} — already claimed (double send?)`);
+      return;
+    }
+    this.paused.delete(campaignId);
+    const epoch = this.bumpEpoch(campaignId);
 
     const { basePayload, variantBPayload, ab } = this.buildPayloads(campaign);
     const vapid = this.vapidOf(campaign.property);
@@ -436,7 +486,12 @@ export class CampaignRunnerService implements OnModuleInit {
     this.remaining.set(campaign.id, Number.MAX_SAFE_INTEGER);
 
     for (;;) {
-      if (this.paused.has(campaign.id)) break; // paused mid-stream: stop targeting more
+      // NOTE: we intentionally do NOT stop targeting on pause. Targeting only
+      // creates queued send rows (no pushes — those pool tasks self-cancel via
+      // the bumped epoch while paused). Stopping here would silently drop every
+      // not-yet-targeted lead, since resume only replays existing queued rows.
+      // Letting targeting finish means the full audience is captured and resume
+      // delivers all of it.
 
       let batch: { id: string; endpoint: string; p256dh: string; auth: string }[];
       if (orderedIds) {
@@ -462,17 +517,21 @@ export class CampaignRunnerService implements OnModuleInit {
       }
       if (batch.length === 0) continue;
 
-      // frequency caps (server-side, §7 step 3)
+      // frequency caps (server-side, §7 step 3). Count queued AND sent rows,
+      // by createdAt — otherwise N concurrent/paced campaigns each see only
+      // their already-delivered rows (0 at queue time) and every one blasts,
+      // blowing past the cap. Queued rows created this window count too.
       const ids = batch.map((s) => s.id);
+      const capStatuses: any = ["queued", "sending", "sent"];
       const [dayCounts, weekCounts] = await Promise.all([
         db.send.groupBy({
           by: ["subscriberId"],
-          where: { subscriberId: { in: ids }, status: "sent", sentAt: { gte: dayAgo } },
+          where: { subscriberId: { in: ids }, status: { in: capStatuses }, createdAt: { gte: dayAgo } },
           _count: { subscriberId: true },
         }),
         db.send.groupBy({
           by: ["subscriberId"],
-          where: { subscriberId: { in: ids }, status: "sent", sentAt: { gte: weekAgo } },
+          where: { subscriberId: { in: ids }, status: { in: capStatuses }, createdAt: { gte: weekAgo } },
           _count: { subscriberId: true },
         }),
       ]);

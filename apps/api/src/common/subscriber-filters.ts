@@ -18,26 +18,54 @@ export interface SubscriberFilterParams {
   fresh?: string;
 }
 
+// Force every filter value to a plain string. Query strings parsed by qs can
+// smuggle objects/arrays (e.g. ?country[not]=IN → { not: "IN" }), which would
+// otherwise be spliced into the Prisma where as an operator. Non-strings and
+// empty strings become undefined (ignored).
+function str(v: unknown): string | undefined {
+  return typeof v === "string" && v.length > 0 ? v : undefined;
+}
+function validDate(v: unknown): Date | undefined {
+  const s = str(v);
+  if (!s) return undefined;
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? undefined : d;
+}
+
 export function buildSubscriberWhere(p: SubscriberFilterParams): Record<string, any> {
   const where: Record<string, any> = {};
-  if (p.property_id) where.propertyId = p.property_id;
-  if (p.status) where.status = p.status;
-  if (p.utm_campaign) where.utmCampaign = { contains: p.utm_campaign, mode: "insensitive" };
-  if (p.utm_source) where.utmSource = { contains: p.utm_source, mode: "insensitive" };
-  if (p.utm_medium) where.utmMedium = { contains: p.utm_medium, mode: "insensitive" };
-  if (p.country) where.country = p.country;
-  if (p.city) where.city = { contains: p.city, mode: "insensitive" };
-  if (p.device) where.device = p.device;
-  if (p.browser) where.browser = p.browser;
-  if (p.os) where.os = p.os;
-  if (p.language) where.language = p.language;
-  if (p.timezone) where.timezone = p.timezone;
-  if (p.from || p.to) {
+  const propertyId = str(p.property_id);
+  const status = str(p.status);
+  const utmCampaign = str(p.utm_campaign);
+  const utmSource = str(p.utm_source);
+  const utmMedium = str(p.utm_medium);
+  const country = str(p.country);
+  const city = str(p.city);
+  const device = str(p.device);
+  const browser = str(p.browser);
+  const os = str(p.os);
+  const language = str(p.language);
+  const timezone = str(p.timezone);
+  if (propertyId) where.propertyId = propertyId;
+  if (status) where.status = status;
+  if (utmCampaign) where.utmCampaign = { contains: utmCampaign, mode: "insensitive" };
+  if (utmSource) where.utmSource = { contains: utmSource, mode: "insensitive" };
+  if (utmMedium) where.utmMedium = { contains: utmMedium, mode: "insensitive" };
+  if (country) where.country = country;
+  if (city) where.city = { contains: city, mode: "insensitive" };
+  if (device) where.device = device;
+  if (browser) where.browser = browser;
+  if (os) where.os = os;
+  if (language) where.language = language;
+  if (timezone) where.timezone = timezone;
+  const from = validDate(p.from);
+  const to = validDate(p.to);
+  if (from || to) {
     where.subscribedAt = {};
-    if (p.from) where.subscribedAt.gte = new Date(p.from);
-    if (p.to) where.subscribedAt.lte = new Date(p.to);
+    if (from) where.subscribedAt.gte = from;
+    if (to) where.subscribedAt.lte = to;
   }
-  if (p.fresh === "yes") where.pushesReceived = 0;
-  if (p.fresh === "no") where.pushesReceived = { gt: 0 };
+  if (str(p.fresh) === "yes") where.pushesReceived = 0;
+  if (str(p.fresh) === "no") where.pushesReceived = { gt: 0 };
   return where;
 }

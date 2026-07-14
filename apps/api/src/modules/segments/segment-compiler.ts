@@ -26,6 +26,8 @@ interface Condition {
 
 export interface SegmentCriteria {
   all?: Condition[];
+  /** explicit "every active lead in the property" bucket (deliberate, never inferred) */
+  all_active?: boolean;
   /** hand-picked leads always in the segment (even if the filter misses them) */
   manual_include?: string[];
   /** hand-removed leads never in the segment (even if the filter matches) */
@@ -37,24 +39,44 @@ export interface SegmentCriteria {
  * This is what counting, sending and member listing must all use.
  *
  * Empty filter semantics:
- *  - no conditions AND no manual includes → {} (all active — the "everyone" bucket)
+ *  - `all_active: true` → the whole active property (minus manual excludes).
+ *    This is the ONLY way to get an "everyone" bucket; it must be set
+ *    deliberately, never inferred from emptiness.
+ *  - conditions present → the filter (OR any manual includes).
  *  - no conditions BUT manual includes present → JUST those leads.
- *    (Auto-assign and manual-assign write only manual_include, so a filterless
- *     bucket must resolve to its members, not silently to the whole property.)
+ *  - nothing at all (no flag, no filter, no includes) → NOBODY.
+ *
+ * The last rule is a safety guarantee: when a manual-only segment's last
+ * member is reassigned elsewhere, its criteria become
+ * `{manual_include:[], manual_exclude:[id]}`. Inferring "everyone" from the
+ * empty include there would blast the entire property minus one lead. So an
+ * emptied bucket resolves to nobody, and a whole-property blast requires the
+ * explicit `all_active` flag (or a campaign's own `targetAll`).
  */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Keep only well-formed UUIDs so a poisoned manual list can't 500 every query. */
+function cleanIds(list: unknown): string[] {
+  if (!Array.isArray(list)) return [];
+  return list.filter((v): v is string => typeof v === "string" && UUID_RE.test(v));
+}
+
 export function segmentAudienceWhere(criteria: SegmentCriteria): Record<string, any> {
   const base = compileCriteria(criteria);
   const hasFilter = Object.keys(base).length > 0;
-  const include = criteria?.manual_include ?? [];
-  const exclude = criteria?.manual_exclude ?? [];
+  const include = cleanIds(criteria?.manual_include);
+  const exclude = cleanIds(criteria?.manual_exclude);
+  const allActive = (criteria as any)?.all_active === true;
 
   let where: Record<string, any>;
-  if (hasFilter) {
+  if (allActive) {
+    where = {}; // explicit everyone bucket
+  } else if (hasFilter) {
     where = include.length > 0 ? { OR: [base, { id: { in: include } }] } : base;
   } else if (include.length > 0) {
     where = { id: { in: include } }; // manual-only bucket → exactly its members
   } else {
-    where = {}; // no filter, no members → everyone (explicit "all" bucket)
+    where = { id: { in: [] } }; // emptied / undefined bucket → nobody (never "everyone")
   }
   if (exclude.length > 0) {
     where = { AND: [where, { id: { notIn: exclude } }] };

@@ -112,6 +112,7 @@ export class PublicController {
    * minting certs). Returns 200 to approve, 404 to refuse.
    */
   @Get("tls-check")
+  @RateLimit({ limit: 300, windowSec: 60 })
   async tlsCheck(@Query("domain") domain: string, @Res() res: Response) {
     const property = await this.service.propertyByHost(domain);
     res.status(property ? 200 : 404).send(property ? "ok" : "no");
@@ -151,22 +152,33 @@ export class PublicController {
    * a tap-again fallback, and records the click for CTR/CDR.
    */
   @Get("call")
-  call(
+  @RateLimit({ limit: 60, windowSec: 60 })
+  async call(
     @Query("n") n: string,
     @Query("sid") sid: string | undefined,
     @Query("pv_sid") pvSid: string | undefined,
     @Res() res: Response,
   ) {
     const number = String(n ?? "").replace(/[^\d+]/g, "");
-    // click is normally recorded by the SW; track here too (idempotent) so a
-    // direct/iOS open still counts
     const clickId = sid || pvSid;
-    if (clickId) this.service.trackClick(clickId).catch(() => undefined);
-    const tel = "tel:" + number;
-    const safe = number.replace(/[^\d+]/g, "");
+    // only dial a number that belongs to the referenced send's campaign — an
+    // arbitrary ?n= (e.g. a premium-rate number) is refused, not auto-dialed
+    const allowed = await this.service.callNumberAllowed(number, clickId);
     res.setHeader("Content-Type", "text/html; charset=utf-8");
     res.setHeader("Cache-Control", "no-store");
-    res.send(`<!doctype html><html><head><meta charset="utf-8">
+    if (!allowed) {
+      return res.status(400).send(`<!doctype html><meta charset="utf-8">
+<title>Link not valid</title>
+<body style="font-family:system-ui,sans-serif;background:#0e0e13;color:#e8e8f0;text-align:center;padding-top:80px">
+<div style="font-size:44px">🔒</div>
+<h2>This call link is not valid</h2>
+<p style="color:#9a9aad">Please tap the notification from the original message.</p></body>`);
+    }
+    // record the click (idempotent) so a direct/iOS open still counts
+    if (clickId) this.service.trackClick(clickId).catch(() => undefined);
+    const tel = "tel:" + number;
+    const safe = number;
+    return res.send(`<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Connecting your call…</title>
 <style>body{font-family:system-ui,sans-serif;background:#0e0e13;color:#e8e8f0;display:flex;min-height:100vh;margin:0;align-items:center;justify-content:center;text-align:center}

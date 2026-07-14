@@ -5,6 +5,40 @@ import {
 } from "@nestjs/common";
 import { PrismaService } from "../../infra/prisma.service";
 import { AuthUser } from "../../common/auth.guard";
+import { lookup } from "node:dns/promises";
+import { isIP } from "node:net";
+
+/**
+ * Reject hostnames that resolve to private/loopback/link-local ranges before
+ * we fetch them server-side — the property domain is tenant-controlled, so an
+ * unguarded fetch is an SSRF into the VPS's internal network / cloud metadata.
+ */
+function isPrivateIp(ip: string): boolean {
+  if (ip.startsWith("127.") || ip === "::1") return true;
+  if (ip.startsWith("10.")) return true;
+  if (ip.startsWith("192.168.")) return true;
+  if (ip.startsWith("169.254.")) return true; // link-local + cloud metadata 169.254.169.254
+  if (ip.startsWith("::ffff:")) return isPrivateIp(ip.slice(7));
+  if (/^fc|^fd/i.test(ip)) return true; // IPv6 unique-local
+  const m = /^172\.(\d+)\./.exec(ip);
+  if (m && Number(m[1]) >= 16 && Number(m[1]) <= 31) return true;
+  return false;
+}
+
+async function assertPublicHost(host: string): Promise<void> {
+  const h = host.toLowerCase();
+  if (h === "localhost" || h.endsWith(".local") || h.endsWith(".internal")) {
+    throw new BadRequestException("Refusing to check an internal hostname");
+  }
+  if (isIP(h)) {
+    if (isPrivateIp(h)) throw new BadRequestException("Refusing to check a private IP");
+    return;
+  }
+  const { address } = await lookup(h);
+  if (isPrivateIp(address)) {
+    throw new BadRequestException("This domain resolves to a private address and can't be checked");
+  }
+}
 
 /**
  * Google Ads integration:
@@ -202,22 +236,34 @@ export class GoogleAdsService {
     let httpsOk = false;
     try {
       const started = Date.now();
-      const res = await fetch(`https://${domain}/`, {
-        redirect: "follow",
-        headers: { "User-Agent": "Mozilla/5.0 (compatible; PushVault-AdsCheck/1.0)" },
-        signal: AbortSignal.timeout(20_000),
-      });
+      // follow redirects manually, re-validating each hop's host so a public
+      // page can't bounce us to an internal IP (SSRF)
+      let url = `https://${domain}/`;
+      let res: Response | null = null;
+      for (let hop = 0; hop < 4; hop++) {
+        await assertPublicHost(new URL(url).hostname);
+        res = await fetch(url, {
+          redirect: "manual",
+          headers: { "User-Agent": "Mozilla/5.0 (compatible; PushVault-AdsCheck/1.0)" },
+          signal: AbortSignal.timeout(20_000),
+        });
+        if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
+          url = new URL(res.headers.get("location")!, url).toString();
+          continue;
+        }
+        break;
+      }
       loadMs = Date.now() - started;
-      finalUrl = res.url || `https://${domain}/`;
+      finalUrl = url;
       httpsOk = finalUrl.startsWith("https://");
-      html = res.ok ? await res.text() : "";
-      if (res.ok) {
+      html = res && res.ok ? await res.text() : "";
+      if (res && res.ok) {
         add("reachable", "Site loads (working destination)", "pass", `HTTP ${res.status} in ${loadMs}ms`);
       } else {
-        add("reachable", "Site loads (working destination)", "fail", `HTTP ${res.status} — Google disapproves ads pointing to error pages`);
+        add("reachable", "Site loads (working destination)", "fail", `HTTP ${res?.status ?? "?"} — Google disapproves ads pointing to error pages`);
       }
     } catch (e: any) {
-      add("reachable", "Site loads (working destination)", "fail", `Could not load https://${domain}/ — ${e?.code ?? e?.name ?? "network error"}`);
+      add("reachable", "Site loads (working destination)", "fail", `Could not load https://${domain}/ — ${e?.message ?? e?.code ?? e?.name ?? "network error"}`);
     }
 
     if (html) {
@@ -431,6 +477,9 @@ export class GoogleAdsService {
   async listCampaigns(user: AuthUser) {
     const cfg = await this.rawConfig(user);
     if (!cfg) return { connected: false, campaigns: [] };
+    // metrics are aggregated over the range via the date filter below WITHOUT
+    // selecting segments.date — selecting it would split each campaign into one
+    // row per day (duplicate rows + per-day, not 30-day, totals)
     const query = `
       SELECT campaign.id, campaign.name, campaign.status,
              campaign_budget.amount_micros,
@@ -438,17 +487,27 @@ export class GoogleAdsService {
       FROM campaign
       WHERE campaign.status != 'REMOVED' AND segments.date DURING LAST_30_DAYS
       ORDER BY campaign.id DESC
-      LIMIT 50`;
+      LIMIT 200`;
     const json = await this.gadsFetch(cfg, `customers/${cfg.customerId}/googleAds:search`, { query });
-    const campaigns = (json?.results ?? []).map((r: any) => ({
-      id: r.campaign?.id,
-      name: r.campaign?.name,
-      status: r.campaign?.status,
-      dailyBudget: Number(r.campaignBudget?.amountMicros ?? 0) / 1_000_000,
-      impressions: Number(r.metrics?.impressions ?? 0),
-      clicks: Number(r.metrics?.clicks ?? 0),
-      cost: Number(r.metrics?.costMicros ?? 0) / 1_000_000,
-    }));
-    return { connected: true, campaigns };
+    // still fold by campaign id defensively, summing metrics
+    const byId = new Map<string, any>();
+    for (const r of json?.results ?? []) {
+      const id = r.campaign?.id;
+      if (!id) continue;
+      const prev = byId.get(id) ?? {
+        id,
+        name: r.campaign?.name,
+        status: r.campaign?.status,
+        dailyBudget: Number(r.campaignBudget?.amountMicros ?? 0) / 1_000_000,
+        impressions: 0,
+        clicks: 0,
+        cost: 0,
+      };
+      prev.impressions += Number(r.metrics?.impressions ?? 0);
+      prev.clicks += Number(r.metrics?.clicks ?? 0);
+      prev.cost += Number(r.metrics?.costMicros ?? 0) / 1_000_000;
+      byId.set(id, prev);
+    }
+    return { connected: true, campaigns: [...byId.values()] };
   }
 }

@@ -82,7 +82,17 @@ export class AutomationsService implements OnModuleInit, OnModuleDestroy {
         },
       });
       for (const job of due) {
-        await this.processJob(job);
+        // isolate each job: one poison job (FK/RLS error, deleted row) must not
+        // abort the whole batch and starve every later drip
+        try {
+          await this.processJob(job);
+        } catch (e: any) {
+          this.logger.error(`drip job ${job.id} failed: ${e.message}`);
+          await this.prisma
+            .forTenant(job.tenantId)
+            .automationJob.update({ where: { id: job.id }, data: { status: "failed" } })
+            .catch(() => undefined);
+        }
       }
     } catch (e: any) {
       this.logger.error(`tick failed: ${e.message}`);
@@ -93,6 +103,14 @@ export class AutomationsService implements OnModuleInit, OnModuleDestroy {
 
   private async processJob(job: any) {
     const db = this.prisma.forTenant(job.tenantId);
+    // claim the job before doing any work: an atomic queued → sending flip means
+    // a concurrent tick / post-crash re-run can't grab and re-send it
+    const claim = await db.automationJob.updateMany({
+      where: { id: job.id, status: "queued" },
+      data: { status: "sending" },
+    });
+    if (claim.count === 0) return; // already claimed by another run
+
     const steps = (job.automation.steps as AutomationStep[]) ?? [];
     const step = steps[job.stepIndex];
 

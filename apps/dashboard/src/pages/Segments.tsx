@@ -78,6 +78,17 @@ export default function Segments() {
 
   async function create(e: React.FormEvent) {
     e.preventDefault();
+    if (!propertyId) {
+      setError("Pick a property first");
+      return;
+    }
+    // block conditions with a blank value instead of silently dropping them
+    // (a dropped condition would make the segment match everyone/nobody)
+    const blank = rows.findIndex((r) => r.value.trim() === "");
+    if (blank !== -1) {
+      setError(`Condition ${blank + 1} has no value — fill it in or remove it`);
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -86,7 +97,7 @@ export default function Segments() {
         body: JSON.stringify({
           propertyId,
           name,
-          criteria: { all: rows.filter((r) => r.value !== "").map((r) => ({ field: r.field, op: r.op, value: parseValue(r.op, r.value) })) },
+          criteria: { all: rows.map((r) => ({ field: r.field, op: r.op, value: parseValue(r.op, r.value) })) },
         }),
       });
       setShowCreate(false);
@@ -101,14 +112,22 @@ export default function Segments() {
   }
 
   async function count(id: string) {
-    const res = await api<{ count: number }>(`/segments/${id}/count`, { method: "POST" });
-    setCounts((c) => ({ ...c, [id]: res.count }));
+    try {
+      const res = await api<{ count: number }>(`/segments/${id}/count`, { method: "POST" });
+      setCounts((c) => ({ ...c, [id]: res.count }));
+    } catch (e: any) {
+      setError(e.message);
+    }
   }
 
   async function remove(id: string) {
     if (!confirm("Delete this segment?")) return;
-    await api(`/segments/${id}`, { method: "DELETE" });
-    load();
+    try {
+      await api(`/segments/${id}`, { method: "DELETE" });
+      load();
+    } catch (e: any) {
+      setError(e.message);
+    }
   }
 
   return (

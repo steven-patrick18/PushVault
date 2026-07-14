@@ -8,8 +8,31 @@ import { join } from "node:path";
 import { AppModule } from "./app.module";
 import { PublicService } from "./modules/public/public.service";
 import { renderOptInPage } from "./modules/public/hosted-page";
+import { AllExceptionsFilter } from "./modules/troubleshoot/all-exceptions.filter";
+import { ErrorLogService } from "./modules/troubleshoot/error-log.service";
+
+/**
+ * Fail fast on missing/weak critical secrets in production. A default JWT
+ * secret would let anyone forge admin tokens for any tenant, so we refuse to
+ * boot rather than run insecure.
+ */
+function assertProductionSecrets() {
+  if (process.env.NODE_ENV !== "production") return;
+  const problems: string[] = [];
+  const jwt = process.env.JWT_SECRET ?? "";
+  if (!jwt || jwt === "dev-secret") problems.push("JWT_SECRET must be set to a strong random value");
+  else if (jwt.length < 24) problems.push("JWT_SECRET is too short (use 32+ random chars)");
+  if (!process.env.DATABASE_URL) problems.push("DATABASE_URL must be set");
+  if (!process.env.APP_DATABASE_URL) problems.push("APP_DATABASE_URL must be set");
+  if (problems.length) {
+    console.error("[api] Refusing to start — insecure/incomplete configuration:");
+    for (const p of problems) console.error("       - " + p);
+    process.exit(1);
+  }
+}
 
 async function bootstrap() {
+  assertProductionSecrets();
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   const express = app.getHttpAdapter().getInstance();
 
@@ -22,6 +45,8 @@ async function bootstrap() {
   app.useGlobalPipes(
     new ValidationPipe({ whitelist: true, transform: true }),
   );
+  // record 5xx failures for the self-serve Troubleshoot page
+  app.useGlobalFilters(new AllExceptionsFilter(app.get(ErrorLogService)));
   app.enableCors({
     origin:
       process.env.NODE_ENV === "production"
@@ -80,9 +105,19 @@ async function bootstrap() {
     }
   });
 
+  app.enableShutdownHooks(); // drain Nest lifecycle (DB, pools) on SIGTERM/SIGINT
+
   const port = Number(process.env.PORT ?? 3000);
   await app.listen(port);
   console.log(`[api] PushVault API listening on http://localhost:${port}/api/v1`);
 }
+
+// never let a stray rejection/exception take the whole API down silently
+process.on("unhandledRejection", (reason) => {
+  console.error("[api] unhandledRejection:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("[api] uncaughtException:", err);
+});
 
 bootstrap();

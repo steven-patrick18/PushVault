@@ -19,9 +19,11 @@ export const RATE_LIMIT_KEY = "rate_limit";
 export const RateLimit = (config: RateLimitConfig) => SetMetadata(RATE_LIMIT_KEY, config);
 
 /**
- * In-memory sliding-window rate limiter (per process). Honors
- * X-Forwarded-For so limits survive a reverse proxy; swap the Map for Redis
- * when running multiple API replicas.
+ * In-memory sliding-window rate limiter (per process). Client IP comes from
+ * Express's `req.ip`, which respects the configured `trust proxy` hop count —
+ * so behind Caddy it resolves the real client, and a spoofed X-Forwarded-For
+ * cannot mint a fresh bucket per request. Swap the Map for Redis when running
+ * multiple API replicas.
  */
 @Injectable()
 export class RateLimitGuard implements CanActivate {
@@ -38,8 +40,10 @@ export class RateLimitGuard implements CanActivate {
     if (!config) return true;
 
     const req = context.switchToHttp().getRequest<Request>();
-    const xff = (req.headers["x-forwarded-for"] as string | undefined)?.split(",")[0]?.trim();
-    const ip = xff || req.ip || "unknown";
+    // req.ip is trust-proxy-aware (see main.ts); do NOT read X-Forwarded-For
+    // directly — its leftmost value is fully client-controlled and would let
+    // an attacker rotate buckets to bypass every per-IP limit.
+    const ip = req.ip || "unknown";
     const propertyKey = config.perProperty ? ((req.body as any)?.property_key ?? "") : "";
     const key = `${context.getClass().name}.${context.getHandler().name}:${ip}:${propertyKey}`;
 

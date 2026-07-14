@@ -123,20 +123,28 @@ export default function Subscribers() {
       setError("Add at least one segment with a weight to activate auto-assign");
       return;
     }
-    const res = await api<AutoAssign>(`/properties/${propertyId}/auto-assign`, {
-      method: "PUT",
-      body: JSON.stringify({ status, rules }),
-    });
-    setAuto(res);
-    setMsg(status === "active" ? "Auto-assign is running — every new lead will be distributed" : "Auto-assign paused");
+    try {
+      const res = await api<AutoAssign>(`/properties/${propertyId}/auto-assign`, {
+        method: "PUT",
+        body: JSON.stringify({ status, rules }),
+      });
+      setAuto(res);
+      setMsg(status === "active" ? "Auto-assign is running — every new lead will be distributed" : "Auto-assign paused");
+    } catch (e: any) {
+      setError(e.message);
+    }
   }
 
   async function stopAutoAssign() {
     if (!confirm("Stop and remove the auto-assign rule?")) return;
-    await api(`/properties/${propertyId}/auto-assign`, { method: "PUT", body: "null" });
-    setAuto({ status: "stopped", rules: [], counts: {} });
-    setAutoRules([]);
-    setMsg("Auto-assign stopped");
+    try {
+      await api(`/properties/${propertyId}/auto-assign`, { method: "PUT", body: "null" });
+      setAuto({ status: "stopped", rules: [], counts: {} });
+      setAutoRules([]);
+      setMsg("Auto-assign stopped");
+    } catch (e: any) {
+      setError(e.message);
+    }
   }
 
   function setFilter(key: keyof typeof EMPTY_FILTERS, value: string) {
@@ -180,8 +188,12 @@ export default function Subscribers() {
 
   async function erase(id: string) {
     if (!confirm("Permanently delete this lead and their send history? (GDPR erasure)")) return;
-    await api(`/subscribers/${id}`, { method: "DELETE" });
-    load();
+    try {
+      await api(`/subscribers/${id}`, { method: "DELETE" });
+      load();
+    } catch (e: any) {
+      setError(e.message);
+    }
   }
 
   const pages = data ? Math.max(1, Math.ceil(data.total / data.pageSize)) : 1;

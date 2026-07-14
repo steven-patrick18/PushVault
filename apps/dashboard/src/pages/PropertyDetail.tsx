@@ -40,7 +40,7 @@ interface Property {
   frequencyCapPerWeek: number;
   verifiedAt: string | null;
   verification: { checkedAt: string; results: { domain: string; url: string | null; ok: boolean; status: number | null }[] } | null;
-  install?: { script: string; serviceWorker: string };
+  install?: { script: string; serviceWorker: string; swUrl?: string; serverIp?: string | null };
 }
 
 interface PageRow {
@@ -279,7 +279,7 @@ export default function PropertyDetail() {
             <div className="code-block">{property.install?.script}</div>
             <label>Step 2 — upload the key file to the website ROOT folder</label>
             <div className="code-block">
-              {`Download: http://localhost:3000/cdn/pv-sw.js\nUpload to: https://${property.domains[0]}/pv-sw.js  (must be at the root)`}
+              {`Download: ${property.install?.swUrl ?? "/cdn/pv-sw.js"}\nUpload to: https://${property.domains[0]}/pv-sw.js  (must be at the root)`}
             </div>
           </>
         )}
@@ -289,7 +289,7 @@ export default function PropertyDetail() {
             <div className="code-block">{property.install?.script}</div>
             <label>Step 2 — upload pv-sw.js to the WordPress ROOT folder (where wp-config.php lives), via FTP or your host's file manager</label>
             <div className="code-block">
-              {`Download: http://localhost:3000/cdn/pv-sw.js\nUpload to: /public_html/pv-sw.js  →  https://${property.domains[0]}/pv-sw.js`}
+              {`Download: ${property.install?.swUrl ?? "/cdn/pv-sw.js"}\nUpload to: /public_html/pv-sw.js  →  https://${property.domains[0]}/pv-sw.js`}
             </div>
             <div className="page-sub" style={{ marginBottom: 0 }}>
               Tip: some caching plugins (WP Rocket, LiteSpeed) exclude .js at root by default — no changes needed. If using Cloudflare, keep pv-sw.js cache TTL short.
@@ -337,7 +337,7 @@ export default function PropertyDetail() {
                 hosts a branded opt-in page (your prompt design) on a subdomain you own — no snippet, no file upload.
               </div>
               <label>Step 1 — in your DNS panel, point a subdomain at the PushVault server</label>
-              <div className="code-block">{`Type: A    Name: ${value.split(".")[0]}    Points to: 192.255.142.123`}</div>
+              <div className="code-block">{`Type: A    Name: ${value.split(".")[0]}    Points to: ${property.install?.serverIp ?? "your server IP"}`}</div>
               <label>Step 2 — enter the subdomain and press Activate (checks DNS, registers it, issues HTTPS)</label>
               <div style={{ display: "flex", gap: 8 }}>
                 <input
@@ -389,9 +389,13 @@ export default function PropertyDetail() {
               className="btn secondary small"
               onClick={async () => {
                 if (!confirm("Generate dedicated VAPID keys? Do this BEFORE collecting subscribers — existing subscribers would stop receiving pushes.")) return;
-                await api(`/properties/${id}/generate-vapid`, { method: "POST" });
-                setMsg("Dedicated VAPID keys generated");
-                load();
+                try {
+                  await api(`/properties/${id}/generate-vapid`, { method: "POST" });
+                  setMsg("Dedicated VAPID keys generated");
+                  load();
+                } catch (e: any) {
+                  setError(e.message);
+                }
               }}
             >
               Generate dedicated keys
@@ -926,14 +930,25 @@ export default function PropertyDetail() {
             className="btn secondary"
             disabled={saving}
             onClick={async () => {
-              const day = Number((document.getElementById("capDay") as HTMLInputElement).value);
-              const week = Number((document.getElementById("capWeek") as HTMLInputElement).value);
-              await api(`/properties/${id}`, {
-                method: "PATCH",
-                body: JSON.stringify({ frequencyCapPerDay: day, frequencyCapPerWeek: week }),
-              });
-              setMsg("Frequency caps saved");
-              load();
+              const dayRaw = (document.getElementById("capDay") as HTMLInputElement).value.trim();
+              const weekRaw = (document.getElementById("capWeek") as HTMLInputElement).value.trim();
+              const day = Number(dayRaw);
+              const week = Number(weekRaw);
+              if (dayRaw === "" || weekRaw === "" || !Number.isFinite(day) || !Number.isFinite(week) || day < 0 || week < 0) {
+                setError("Enter a number (0 or more) for both caps");
+                return;
+              }
+              try {
+                await api(`/properties/${id}`, {
+                  method: "PATCH",
+                  body: JSON.stringify({ frequencyCapPerDay: day, frequencyCapPerWeek: week }),
+                });
+                setMsg("Frequency caps saved");
+                setError("");
+                load();
+              } catch (e: any) {
+                setError(e.message);
+              }
             }}
           >
             Save caps

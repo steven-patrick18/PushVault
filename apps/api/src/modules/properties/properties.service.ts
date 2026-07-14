@@ -5,7 +5,7 @@ import {
 } from "@nestjs/common";
 import { PrismaService } from "../../infra/prisma.service";
 import { generateKey, hashApiKey } from "../../common/crypto";
-import { AuthUser } from "../../common/auth.guard";
+import { assertPropertyAccess, AuthUser } from "../../common/auth.guard";
 import * as webpush from "web-push";
 import { resolve4 } from "node:dns/promises";
 
@@ -66,6 +66,7 @@ export class PropertiesService {
   }
 
   async get(user: AuthUser, id: string) {
+    assertPropertyAccess(user, id);
     const property = await this.db(user).property.findUnique({ where: { id } });
     if (!property) throw new NotFoundException("Property not found");
     return { ...this.serialize(property), install: this.installSnippet(property.propertyKey) };
@@ -308,6 +309,7 @@ export class PropertiesService {
 
   /** Pages discovered by the snippet beacon, with allow/block state. */
   async pages(user: AuthUser, id: string) {
+    assertPropertyAccess(user, id);
     const property = await this.db(user).property.findUnique({ where: { id } });
     if (!property) throw new NotFoundException("Property not found");
     const pages = await this.db(user).pagePath.findMany({
@@ -331,6 +333,7 @@ export class PropertiesService {
 
   /** Auto-assign distribution rule for new leads (status + weighted segment list). */
   async getAutoAssign(user: AuthUser, id: string) {
+    assertPropertyAccess(user, id);
     const property = await this.db(user).property.findUnique({
       where: { id },
       select: { autoAssign: true },
@@ -371,6 +374,8 @@ export class PropertiesService {
     const cdn = process.env.CDN_BASE_URL ?? "http://localhost:3000/cdn";
     return {
       script: `<script src="${cdn}/pushvault.js" data-property-key="${propertyKey}" defer></script>`,
+      swUrl: `${cdn}/pv-sw.js`, // download source for the service worker
+      serverIp: process.env.SERVER_PUBLIC_IP ?? null, // A-record target for hosted opt-in pages
       serviceWorker:
         "Upload pv-sw.js to your site root so it is reachable at https://yourdomain.com/pv-sw.js",
     };

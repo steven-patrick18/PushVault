@@ -56,8 +56,16 @@ class CreateUserDto {
 export class SettingsController {
   constructor(private readonly prisma: PrismaService) {}
 
+  /** These endpoints expose the staff roster, financials and audit trail. */
+  private assertStaff(user: AuthUser) {
+    if (user.role !== "admin" && user.role !== "manager") {
+      throw new ForbiddenException("Only admins and managers can access workspace settings");
+    }
+  }
+
   @Get("tenant")
   tenant(@CurrentUser() user: AuthUser) {
+    this.assertStaff(user);
     return this.prisma.forTenant(user.tenantId).tenant.findUnique({
       where: { id: user.tenantId },
       select: {
@@ -74,6 +82,11 @@ export class SettingsController {
 
   @Patch("tenant")
   async updateTenant(@CurrentUser() user: AuthUser, @Body() dto: UpdateTenantDto) {
+    this.assertStaff(user);
+    // plan + billing rates control quota and money — admins only
+    if ((dto.plan !== undefined || dto.billingRates !== undefined) && user.role !== "admin") {
+      throw new ForbiddenException("Only admins can change the plan or billing rates");
+    }
     const db = this.prisma.forTenant(user.tenantId);
     const data: any = { ...dto };
     if (dto.billingRates !== undefined) data.billingRates = normalizeRates(dto.billingRates);
@@ -97,6 +110,7 @@ export class SettingsController {
 
   @Get("users")
   users(@CurrentUser() user: AuthUser) {
+    this.assertStaff(user);
     return this.prisma.forTenant(user.tenantId).user.findMany({
       select: { id: true, email: true, role: true, propertyIds: true, lastLoginAt: true, createdAt: true },
       orderBy: { createdAt: "asc" },
@@ -154,6 +168,7 @@ export class SettingsController {
   /** Billing: plan, quota, current-month usage and pay-per-use spend. */
   @Get("billing")
   async billing(@CurrentUser() user: AuthUser) {
+    this.assertStaff(user);
     const db = this.prisma.forTenant(user.tenantId);
     const tenant = await db.tenant.findUnique({
       where: { id: user.tenantId },
@@ -193,6 +208,7 @@ export class SettingsController {
 
   @Get("audit")
   async audit(@CurrentUser() user: AuthUser) {
+    this.assertStaff(user);
     const db = this.prisma.forTenant(user.tenantId);
     const [rows, users] = await Promise.all([
       db.auditLog.findMany({ orderBy: { createdAt: "desc" }, take: 100 }),

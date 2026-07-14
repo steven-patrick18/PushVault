@@ -89,14 +89,22 @@ export default function Settings() {
 
   async function removeUser(id: string) {
     if (!confirm("Remove this user?")) return;
-    await api(`/users/${id}`, { method: "DELETE" });
-    load();
+    try {
+      await api(`/users/${id}`, { method: "DELETE" });
+      load();
+    } catch (e: any) {
+      setError(e.message);
+    }
   }
 
   async function changePlan(plan: string) {
-    await api("/tenant", { method: "PATCH", body: JSON.stringify({ plan }) });
-    setMsg(`Plan changed to ${plan}`);
-    load();
+    try {
+      await api("/tenant", { method: "PATCH", body: JSON.stringify({ plan }) });
+      setMsg(`Plan changed to ${plan}`);
+      load();
+    } catch (e: any) {
+      setError(e.message);
+    }
   }
 
   async function save() {

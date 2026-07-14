@@ -5,10 +5,29 @@
 	on_demand_tls {
 		ask http://api:3000/api/v1/public/tls-check
 	}
+	# cap request bodies globally — the API's own limits are the deeper guard
+	servers {
+		max_header_size 32kb
+	}
+}
+
+# reusable security headers for browser-facing responses
+(security_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
 }
 
 # the dashboard + API + CDN
 {$PUSH_DOMAIN} {
+	import security_headers
+	request_body {
+		max_size 2MB
+	}
 	encode zstd gzip
 	reverse_proxy api:3000
 }
@@ -16,8 +35,12 @@
 # any other host pointed here (property opt-in subdomains) — TLS issued on
 # demand for approved domains; the API serves the branded page + /pv-sw.js
 :443 {
+	import security_headers
 	tls {
 		on_demand
+	}
+	request_body {
+		max_size 2MB
 	}
 	encode zstd gzip
 	reverse_proxy api:3000

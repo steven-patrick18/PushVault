@@ -1,10 +1,20 @@
 # PushVault production stack — single server.
 # Usage (from the repo root):
 #   docker compose -f deploy/docker-compose.prod.yml --env-file deploy/.env up -d --build
+
+# cap json log files on every service so they can't fill the disk over months
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   postgres:
     image: postgres:16
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 4g
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -29,6 +39,8 @@ services:
   redis:
     image: redis:7
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 512m
     command: redis-server --maxmemory 384mb --maxmemory-policy allkeys-lru
     volumes:
       - redisdata:/data
@@ -45,6 +57,11 @@ services:
       args:
         APP_BASE_URL: https://${PUSH_DOMAIN}
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 4g
+    # give in-flight blasts time to drain on `docker stop`/redeploy (SIGTERM →
+    # enableShutdownHooks) before the container is killed
+    stop_grace_period: 30s
     depends_on:
       postgres:
         condition: service_healthy
@@ -84,8 +101,11 @@ services:
   caddy:
     image: caddy:2
     restart: unless-stopped
+    logging: *default-logging
+    mem_limit: 512m
     depends_on:
-      - api
+      api:
+        condition: service_healthy
     ports:
       - "80:80"
       - "443:443"

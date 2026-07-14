@@ -39,24 +39,38 @@ function fmtDelay(mins: number): string {
 export default function Automations() {
   const readOnly = getUser()?.role === "client";
   const [automations, setAutomations] = useState<Automation[]>([]);
-  const [properties, setProperties] = useState<{ id: string; name: string }[]>([]);
+  const [properties, setProperties] = useState<{ id: string; name: string; domains?: string[] }[]>([]);
   const [showCreate, setShowCreate] = useState(false);
   const [name, setName] = useState("Welcome series");
   const [propertyId, setPropertyId] = useState("");
+  const propertyUrl = () => {
+    const d = properties.find((p) => p.id === propertyId)?.domains?.[0];
+    return d ? `https://${d}/` : "";
+  };
   const [steps, setSteps] = useState<StepDraft[]>([
-    { delay: "0", unit: "minutes", title: "🎉 Thanks for subscribing!", body: "Here's 10% off your first order: WELCOME10", click_url: "http://localhost:8080/?utm_source=push&utm_campaign=welcome" },
+    { delay: "0", unit: "minutes", title: "🎉 Thanks for subscribing!", body: "Here's 10% off your first order: WELCOME10", click_url: "" },
   ]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
 
   const load = () => {
     api<Automation[]>("/automations").then(setAutomations).catch((e) => setError(e.message));
-    api<{ id: string; name: string }[]>("/properties").then((p) => {
+    api<{ id: string; name: string; domains?: string[] }[]>("/properties").then((p) => {
       setProperties(p);
       setPropertyId((prev) => prev || p[0]?.id || "");
-    });
+    }).catch((e) => setError(e.message));
   };
   useEffect(load, []);
+
+  // prefill the first step's URL from the chosen property's domain (utm tagged)
+  useEffect(() => {
+    const base = propertyUrl();
+    if (!base) return;
+    setSteps((prev) =>
+      prev.map((s, i) => (i === 0 && !s.click_url ? { ...s, click_url: `${base}?utm_source=push&utm_campaign=welcome` } : s)),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [propertyId, properties]);
 
   async function create(e: React.FormEvent) {
     e.preventDefault();
@@ -86,17 +100,25 @@ export default function Automations() {
   }
 
   async function toggle(a: Automation) {
-    await api(`/automations/${a.id}`, {
-      method: "PATCH",
-      body: JSON.stringify({ status: a.status === "active" ? "paused" : "active" }),
-    });
-    load();
+    try {
+      await api(`/automations/${a.id}`, {
+        method: "PATCH",
+        body: JSON.stringify({ status: a.status === "active" ? "paused" : "active" }),
+      });
+      load();
+    } catch (e: any) {
+      setError(e.message);
+    }
   }
 
   async function remove(id: string) {
     if (!confirm("Delete this automation? Pending drips will stop.")) return;
-    await api(`/automations/${id}`, { method: "DELETE" });
-    load();
+    try {
+      await api(`/automations/${id}`, { method: "DELETE" });
+      load();
+    } catch (e: any) {
+      setError(e.message);
+    }
   }
 
   return (
@@ -215,7 +237,7 @@ export default function Automations() {
             ))}
             {steps.length < 10 && (
               <button type="button" className="btn secondary small"
-                onClick={() => setSteps([...steps, { delay: "1", unit: "days", title: "", body: "", click_url: "http://localhost:8080/" }])}>
+                onClick={() => setSteps([...steps, { delay: "1", unit: "days", title: "", body: "", click_url: propertyUrl() }])}>
                 + Add step
               </button>
             )}

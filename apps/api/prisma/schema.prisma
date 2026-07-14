@@ -212,6 +212,7 @@ model Segment {
   campaigns Campaign[]
 
   @@index([tenantId])
+  @@index([propertyId]) // dashboard lists segments per property
   @@map("segments")
 }
 
@@ -282,6 +283,9 @@ model Send {
   subscriber Subscriber  @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
 
   @@index([campaignId, status])
+  @@index([subscriberId]) // GDPR cascade delete + segment activity join
+  @@index([tenantId, createdAt]) // monthly quota / billing counts
+  @@index([campaignId, createdAt]) // CDR paging + old-send prune
   @@map("sends")
 }
 
@@ -320,6 +324,7 @@ model AutomationJob {
   subscriber Subscriber @relation(fields: [subscriberId], references: [id], onDelete: Cascade)
 
   @@index([status, dueAt])
+  @@index([subscriberId]) // cascade delete on GDPR erase / unsubscribe cancel
   @@map("automation_jobs")
 }
 
@@ -342,6 +347,7 @@ model Conversion {
 
   @@index([propertyId, createdAt])
   @@index([campaignId])
+  @@index([subscriberId]) // SetNull on GDPR erase avoids a seq scan
   @@map("conversions")
 }
 

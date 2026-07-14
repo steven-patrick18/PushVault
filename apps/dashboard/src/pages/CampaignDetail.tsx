@@ -496,15 +496,25 @@ export default function CampaignDetail() {
       setError("No leads selected — pick at least one segment or enable 'All active subscribers'");
       return;
     }
+    if (new Date(form.scheduleAt).getTime() <= Date.now()) {
+      setError("Schedule time must be in the future");
+      return;
+    }
     if (!(await save())) return;
-    await api(`/campaigns/${id}/schedule`, {
-      method: "POST",
-      body: JSON.stringify({
-        schedule_at: new Date(form.scheduleAt).toISOString(),
-        recurrence: repeat === "none" ? null : { freq: repeat, interval: 1, ...(repeat === "WEEKLY" && weekdays.length ? { byweekday: weekdays } : {}) },
-      }),
-    });
-    load();
+    try {
+      await api(`/campaigns/${id}/schedule`, {
+        method: "POST",
+        body: JSON.stringify({
+          schedule_at: new Date(form.scheduleAt).toISOString(),
+          recurrence: repeat === "none" ? null : { freq: repeat, interval: 1, ...(repeat === "WEEKLY" && weekdays.length ? { byweekday: weekdays } : {}) },
+        }),
+      });
+      setMsg(`Scheduled for ${new Date(form.scheduleAt).toLocaleString()}`);
+      setError("");
+      load();
+    } catch (e: any) {
+      setError(e.message);
+    }
   }
 
   useEffect(() => {
@@ -513,48 +523,75 @@ export default function CampaignDetail() {
     }
   }, [id, cdrPage, campaign?.status]);
 
+  // RFC-4180 quoting + formula-injection guard: utmCampaign etc. come from the
+  // public subscribe endpoint (attacker-controlled), so a value like
+  // "=HYPERLINK(...)" must not execute when the CSV is opened in Excel.
+  function csvCell(v: unknown): string {
+    let s = v === null || v === undefined ? "" : String(v);
+    if (/^[=+\-@\t\r]/.test(s)) s = "'" + s; // neutralize formula triggers
+    if (/[",\n\r]/.test(s)) s = '"' + s.replace(/"/g, '""') + '"';
+    return s;
+  }
+
   async function exportCdrCsv() {
     setMsg("Exporting CDR…");
-    const lines = ["send_id,timestamp,status,variant,clicked,error,lead_id,lead_campaign,device,country,cost"];
-    let p = 1;
-    for (;;) {
-      const batch = await api<Cdr>(`/campaigns/${id}/cdr?page=${p}&page_size=500`);
-      for (const r of batch.rows) {
-        lines.push(
-          [r.id, r.at, r.status, r.variant ?? "", r.clicked, r.errorCode ?? "", r.lead.id, r.lead.utmCampaign ?? "", r.lead.device ?? "", r.lead.country ?? "", r.cost].join(","),
-        );
+    try {
+      const cols = ["send_id", "timestamp", "status", "variant", "clicked", "error", "lead_id", "lead_campaign", "device", "country", "cost"];
+      const lines = [cols.join(",")];
+      let p = 1;
+      let truncated = false;
+      for (;;) {
+        const batch = await api<Cdr>(`/campaigns/${id}/cdr?page=${p}&page_size=500`);
+        for (const r of batch.rows) {
+          lines.push(
+            [r.id, r.at, r.status, r.variant ?? "", r.clicked, r.errorCode ?? "", r.lead.id, r.lead.utmCampaign ?? "", r.lead.device ?? "", r.lead.country ?? "", r.cost]
+              .map(csvCell)
+              .join(","),
+          );
+        }
+        if (p * batch.pageSize >= batch.total) break;
+        if (p >= 200) { truncated = true; break; } // 100k-row safety cap
+        p++;
       }
-      if (p * batch.pageSize >= batch.total || p >= 40) break;
-      p++;
+      const blob = new Blob([lines.join("\r\n")], { type: "text/csv" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `cdr-${campaign?.name.replace(/\W+/g, "-")}.csv`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+      setMsg(
+        `CDR exported (${lines.length - 1} records)` +
+          (truncated ? " — capped at 100,000 rows; contact support for a full export" : ""),
+      );
+    } catch (e: any) {
+      setError(e.message);
+      setMsg("");
     }
-    const blob = new Blob([lines.join("\n")], { type: "text/csv" });
-    const a = document.createElement("a");
-    a.href = URL.createObjectURL(blob);
-    a.download = `cdr-${campaign?.name.replace(/\W+/g, "-")}.csv`;
-    a.click();
-    URL.revokeObjectURL(a.href);
-    setMsg(`CDR exported (${lines.length - 1} records)`);
   }
 
   async function duplicate() {
     const nums = tapAction === "call" ? callNumbersList() : [];
-    const created = await api<Campaign>("/campaigns", {
-      method: "POST",
-      body: JSON.stringify({
-        propertyId: campaign!.propertyId,
-        name: form.name + " (copy)",
-        title: form.title, body: form.body,
-        clickUrl: nums.length ? `tel:${nums[0]}` : form.clickUrl,
-        callNumbers: nums, callStrategy,
-        sourceDomain: form.sourceDomain.trim() || undefined,
-        iconUrl: form.iconUrl || undefined, imageUrl: form.imageUrl || undefined,
-        actions: actionsPayload(),
-        segmentIds, mixStrategy, targetAll,
-        pacingPerMinute: pacing ? Number(pacing) : undefined,
-        abConfig: ab.enabled ? { enabled: true, variantB: { title: ab.titleB, body: ab.bodyB } } : undefined,
-      }),
-    });
-    navigate(`/campaigns/${created.id}`);
+    try {
+      const created = await api<Campaign>("/campaigns", {
+        method: "POST",
+        body: JSON.stringify({
+          propertyId: campaign!.propertyId,
+          name: form.name + " (copy)",
+          title: form.title, body: form.body,
+          clickUrl: nums.length ? `tel:${nums[0]}` : form.clickUrl,
+          callNumbers: nums, callStrategy,
+          sourceDomain: form.sourceDomain.trim() || undefined,
+          iconUrl: form.iconUrl || undefined, imageUrl: form.imageUrl || undefined,
+          actions: actionsPayload(),
+          segmentIds, mixStrategy, targetAll,
+          pacingPerMinute: pacing ? Number(pacing) : undefined,
+          abConfig: ab.enabled ? { enabled: true, variantB: { title: ab.titleB, body: ab.bodyB } } : undefined,
+        }),
+      });
+      navigate(`/campaigns/${created.id}`);
+    } catch (e: any) {
+      setError(e.message);
+    }
   }
 
   if (!campaign) return <div className="page-sub">{error || "Loading…"}</div>;

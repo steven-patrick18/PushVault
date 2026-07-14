@@ -16,7 +16,14 @@ export function clearSession() {
 
 export function getUser(): { email: string; role: string; tenantName: string } | null {
   const raw = localStorage.getItem("pv_user");
-  return raw ? JSON.parse(raw) : null;
+  if (!raw) return null;
+  try {
+    return JSON.parse(raw);
+  } catch {
+    // corrupted storage shouldn't white-screen the app — treat as logged out
+    clearSession();
+    return null;
+  }
 }
 
 export async function api<T = unknown>(
@@ -32,14 +39,19 @@ export async function api<T = unknown>(
       ...(options.headers ?? {}),
     },
   });
-  if (res.status === 401) {
+  // A 401 on a normal call means the session expired → bounce to login. But a
+  // 401 from the login call itself is "wrong password" — let the caller show
+  // the server's message instead of silently reloading the page.
+  if (res.status === 401 && !path.startsWith("/auth/")) {
     clearSession();
     window.location.href = "/login";
     throw new Error("Unauthorized");
   }
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error((body as any).message ?? `Request failed (${res.status})`);
+    const m = (body as any).message;
+    // class-validator returns message as an array of strings
+    throw new Error(Array.isArray(m) ? m.join(", ") : (m ?? `Request failed (${res.status})`));
   }
   // tolerate 204 / empty-body responses so lifecycle calls don't throw
   if (res.status === 204) return undefined as T;

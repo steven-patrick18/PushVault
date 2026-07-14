@@ -9,15 +9,25 @@ const NAV = [
   { to: "/campaigns", label: "Campaigns", icon: "📣" },
   { to: "/automations", label: "Automations", icon: "🔁" },
   { to: "/updates", label: "Updates", icon: "⬇" },
+  { to: "/troubleshoot", label: "Troubleshoot", icon: "🩺" },
   { to: "/settings", label: "Settings", icon: "⚙" },
 ];
 
 // client-role users get a read-only portal with a reduced menu
 const CLIENT_NAV = ["/", "/subscribers", "/campaigns", "/automations"];
+// operators run daily campaigns; they can't manage properties or settings
+const OPERATOR_NAV = ["/", "/subscribers", "/segments", "/campaigns", "/automations"];
+// Troubleshoot + Settings + Properties expose cross-property / config → staff only
+const ADMIN_ONLY = ["/troubleshoot"];
 
 export default function Layout() {
   const user = getUser();
-  const nav = user?.role === "client" ? NAV.filter((n) => CLIENT_NAV.includes(n.to)) : NAV;
+  const isAdmin = user?.role === "admin" || user?.role === "manager";
+  const nav = NAV.filter((n) => {
+    if (user?.role === "client") return CLIENT_NAV.includes(n.to);
+    if (user?.role === "operator") return OPERATOR_NAV.includes(n.to);
+    return isAdmin || !ADMIN_ONLY.includes(n.to);
+  });
   const navigate = useNavigate();
 
   return (

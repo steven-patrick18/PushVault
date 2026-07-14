@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -56,6 +57,17 @@ class UpdateSegmentDto {
   criteria?: SegmentCriteria;
 }
 
+class AddMemberDto {
+  @IsUUID()
+  subscriber_id: string;
+}
+
+class AssignFilteredDto {
+  @IsOptional()
+  @IsObject()
+  filters?: SubscriberFilterParams;
+}
+
 @Controller("segments")
 @UseGuards(JwtAuthGuard)
 export class SegmentsController {
@@ -70,8 +82,10 @@ export class SegmentsController {
 
   @Get()
   list(@CurrentUser() user: AuthUser, @Query("property_id") propertyId?: string) {
+    if (propertyId) assertPropertyAccess(user, propertyId);
     return this.db(user).segment.findMany({
-      where: { ...propertyScope(user), ...(propertyId ? { propertyId } : {}) },
+      // scope spread LAST so a client's property_id query param can't widen it
+      where: { ...(propertyId ? { propertyId } : {}), ...propertyScope(user) },
       orderBy: { createdAt: "desc" },
     });
   }
@@ -110,7 +124,26 @@ export class SegmentsController {
 
   @Delete(":id")
   async remove(@CurrentUser() user: AuthUser, @Param("id", ParseUUIDPipe) id: string) {
-    await this.db(user).segment.delete({ where: { id } });
+    const db = this.db(user);
+    const segment = await db.segment.findUnique({ where: { id } });
+    if (!segment) throw new NotFoundException("Segment not found");
+    assertPropertyAccess(user, segment.propertyId);
+    // refuse if a live campaign still targets this segment (avoid a recurring
+    // blast silently shrinking to zero audience)
+    const users = await db.campaign.count({
+      where: {
+        status: { in: ["scheduled", "sending", "paused"] },
+        OR: [{ segmentId: id }, { segmentIds: { has: id } }],
+      },
+    });
+    if (users > 0) {
+      throw new BadRequestException(
+        `This segment is used by ${users} active/scheduled campaign(s) — remove it from them first.`,
+      );
+    }
+    await db.segment.delete({ where: { id } });
+    // clean auto-assign references so new leads aren't routed to a dead segment
+    await this.membership.cleanupDeletedSegment(user.tenantId, segment.propertyId, id).catch(() => undefined);
     await this.audit(user, "segment.delete", id, null, null);
     return { ok: true };
   }
@@ -258,7 +291,7 @@ export class SegmentsController {
   async addMember(
     @CurrentUser() user: AuthUser,
     @Param("id", ParseUUIDPipe) id: string,
-    @Body() body: { subscriber_id: string },
+    @Body() body: AddMemberDto,
   ) {
     return this.mutateManual(user, id, body.subscriber_id, "add");
   }
@@ -306,14 +339,15 @@ export class SegmentsController {
   async assignFiltered(
     @CurrentUser() user: AuthUser,
     @Param("id", ParseUUIDPipe) id: string,
-    @Body() body: { filters?: SubscriberFilterParams },
+    @Body() body: AssignFilteredDto,
   ) {
     const db = this.db(user);
     const segment = await db.segment.findUnique({ where: { id } });
     if (!segment) throw new NotFoundException("Segment not found");
-    const where = {
+    const where: any = {
       ...buildSubscriberWhere(body.filters ?? {}),
       propertyId: segment.propertyId, // never cross properties
+      status: "active", // only assignable, active leads (avoids bloating manual lists)
     };
     const matches = await db.subscriber.findMany({
       where,
@@ -351,6 +385,9 @@ export class SegmentsController {
         subscriber: { ...audience, propertyId: segment.propertyId },
       },
       select: { status: true, clicked: true, createdAt: true },
+      // newest first so the cap keeps the most-recent sends (the short windows
+      // the UI cares about), not an arbitrary unordered slice
+      orderBy: { createdAt: "desc" },
       take: 50_000,
     });
 

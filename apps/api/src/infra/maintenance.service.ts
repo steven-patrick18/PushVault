@@ -1,5 +1,6 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
+import { forwardRef, Inject, Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
 import { PrismaService } from "./prisma.service";
+import { CampaignRunnerService } from "../modules/campaigns/campaign-runner.service";
 
 const HOURLY = 3600_000;
 const IDLE_WINDOW = 20 * 60_000; // no sends in 20 min → orphaned, safe to finalize
@@ -15,7 +16,11 @@ export class MaintenanceService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger("Maintenance");
   private timer: NodeJS.Timeout | null = null;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    @Inject(forwardRef(() => CampaignRunnerService))
+    private readonly runner: CampaignRunnerService,
+  ) {}
 
   onModuleInit() {
     this.timer = setInterval(() => void this.run(), HOURLY);
@@ -80,9 +85,18 @@ export class MaintenanceService implements OnModuleInit, OnModuleDestroy {
       select: { id: true, tenantId: true },
     });
     for (const c of candidates) {
+      // this process is actively dispatching/draining it — never finalize
+      // out from under the runner (a paced or all-failing blast writes no
+      // `sentAt` but is very much alive)
+      if (this.runner.isLive(c.id)) continue;
       const db = this.prisma.forTenant(c.tenantId);
+      // "activity" = any send row created OR delivered recently, so a blast
+      // whose pushes are all FAILING (e.g. bad VAPID) still counts as live
       const recentActivity = await db.send.count({
-        where: { campaignId: c.id, sentAt: { gte: idleSince } },
+        where: {
+          campaignId: c.id,
+          OR: [{ createdAt: { gte: idleSince } }, { sentAt: { gte: idleSince } }],
+        },
       });
       if (recentActivity > 0) continue; // still actively delivering — leave it
 

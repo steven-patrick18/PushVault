@@ -70,7 +70,8 @@ export class UpdatesService {
 
     return {
       branch,
-      remote,
+      // never expose an embedded token (https://user:token@host/…)
+      remote: remote ? remote.replace(/\/\/[^@/]+@/, "//") : remote,
       version: process.env.npm_package_version ?? "0.1.0",
       behind,
       ahead,

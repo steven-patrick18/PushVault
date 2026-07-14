@@ -27,10 +27,12 @@ RUN pnpm --filter @pushvault/snippet build \
 
 # ---------- runtime ----------
 FROM node:22-bookworm-slim
-RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates git && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY --from=build /app ./
+# copy owned by the built-in unprivileged `node` user — the app runs as non-root
+COPY --from=build --chown=node:node /app ./
 ENV NODE_ENV=production
+USER node
 WORKDIR /app/apps/api
 EXPOSE 3000
 # migrations → align the RLS app-role password → start
