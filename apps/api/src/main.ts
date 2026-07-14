@@ -55,7 +55,10 @@ async function bootstrap() {
   // production: the API also serves the dashboard SPA (single container)
   const dashboardDist = join(__dirname, "..", "..", "dashboard", "dist");
   const haveDashboard = existsSync(join(dashboardDist, "index.html"));
-  if (haveDashboard) app.useStaticAssets(dashboardDist);
+  // index:false — otherwise express.static serves the SPA's index.html at "/"
+  // for EVERY host before the host-aware fallback below can run, which would
+  // show the dashboard instead of the opt-in page on property subdomains
+  if (haveDashboard) app.useStaticAssets(dashboardDist, { index: false });
 
   express.get(/^\/(?!api\/|cdn\/).*/, async (req: any, res: any) => {
     const host = String(req.headers.host ?? "").toLowerCase().split(":")[0];
