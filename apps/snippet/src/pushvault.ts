@@ -11,9 +11,9 @@ declare const __APP_BASE__: string;
 interface PromptConfig {
   trigger?: { type: "delay" | "scroll" | "exit_intent"; seconds?: number; percent?: number };
   pages?: { include?: string[]; exclude?: string[] };
-  text?: { headline?: string; yes?: string; no?: string };
+  text?: { headline?: string; sub?: string; yes?: string; no?: string };
   style?: {
-    position?: "top" | "bottom" | "float";
+    position?: "top" | "bottom" | "float" | "modal";
     /** float mode anchor, in viewport % (banner center) */
     x?: number;
     y?: number;
@@ -177,8 +177,84 @@ interface RemoteConfig {
     }
   }
 
+  // Centered modal card (style.position === "modal") — a full-screen dimmed
+  // overlay with a card in the middle, matching the hosted opt-in page look.
+  function renderModal(cfg: RemoteConfig) {
+    const pc = cfg.prompt_config ?? {};
+    const text = pc.text ?? {};
+    const style = pc.style ?? {};
+    const accent = style.accent || "#7C3AED";
+    const dark = style.theme === "dark";
+    const bg = style.bg || (dark ? "#16161e" : "#ffffff");
+    const textColor = style.text_color || (dark ? "#f0f0f5" : "#16161e");
+    const subColor = dark ? "#9a9aad" : "#6a6a78";
+    const radius = style.radius ?? 20;
+
+    const host = document.createElement("div");
+    host.id = "pushvault-prompt";
+    host.style.cssText =
+      "position:fixed;inset:0;z-index:2147483000;background:rgba(6,6,12,.62);" +
+      "display:flex;align-items:center;justify-content:center;padding:20px;pointer-events:auto;";
+    const shadow = host.attachShadow({ mode: "closed" });
+    const wrap = document.createElement("div");
+    wrap.innerHTML =
+      '<div class="pv-card" role="dialog" aria-modal="true" aria-label="Notification opt-in">' +
+      '<button class="pv-x" aria-label="Close">&#10005;</button>' +
+      (style.logo
+        ? '<img class="pv-logo" src="' + style.logo + '" alt="">'
+        : '<div class="pv-bell">&#128276;</div>') +
+      '<div class="pv-head"></div>' +
+      '<div class="pv-sub"></div>' +
+      '<button class="pv-yes"></button>' +
+      '<button class="pv-no"></button>' +
+      "</div>";
+    const css = document.createElement("style");
+    css.textContent =
+      ".pv-card{position:relative;pointer-events:auto;max-width:400px;width:100%;text-align:center;" +
+      "background:" + bg + ";color:" + textColor + ";border-radius:" + radius + "px;padding:34px 30px 28px;" +
+      "box-shadow:0 24px 70px rgba(0,0,0,.45);font-family:system-ui,-apple-system,sans-serif;" +
+      "animation:pvin .22s ease-out}" +
+      "@keyframes pvin{from{opacity:0;transform:translateY(12px) scale(.98)}to{opacity:1;transform:none}}" +
+      ".pv-bell{font-size:52px;line-height:1;margin-bottom:12px}" +
+      ".pv-logo{width:60px;height:60px;border-radius:14px;object-fit:cover;display:block;margin:0 auto 14px}" +
+      ".pv-head{font-size:21px;font-weight:700;line-height:1.3;margin-bottom:8px}" +
+      ".pv-sub{font-size:14px;color:" + subColor + ";line-height:1.5;margin-bottom:22px}" +
+      ".pv-yes{width:100%;background:" + accent + ";color:#fff;border:none;border-radius:12px;" +
+      "padding:15px;font-size:16px;font-weight:700;cursor:pointer}" +
+      ".pv-no{width:100%;background:none;border:none;color:" + subColor + ";font-size:13px;" +
+      "padding:12px 0 0;cursor:pointer}" +
+      ".pv-x{position:absolute;top:12px;right:14px;background:none;border:none;color:" + subColor +
+      ";font-size:15px;cursor:pointer;line-height:1}";
+    shadow.appendChild(css);
+    shadow.appendChild(wrap);
+
+    (shadow.querySelector(".pv-head") as HTMLElement).textContent =
+      text.headline || "Get notified about updates?";
+    (shadow.querySelector(".pv-sub") as HTMLElement).textContent =
+      text.sub || "Allow notifications to get our latest offers and updates.";
+    const yesBtn = shadow.querySelector(".pv-yes") as HTMLButtonElement;
+    const noBtn = shadow.querySelector(".pv-no") as HTMLButtonElement;
+    yesBtn.textContent = text.yes || "Yes, notify me";
+    noBtn.textContent = text.no || "No thanks";
+
+    const remove = () => host.remove();
+    yesBtn.addEventListener("click", async () => {
+      yesBtn.disabled = true;
+      yesBtn.textContent = "…";
+      remove();
+      await doSubscribe(cfg.vapid_public_key);
+    });
+    const dismiss = () => { setChoice("no"); remove(); };
+    noBtn.addEventListener("click", dismiss);
+    (shadow.querySelector(".pv-x") as HTMLButtonElement).addEventListener("click", dismiss);
+    host.addEventListener("click", (e) => { if (e.target === host) dismiss(); });
+
+    document.documentElement.appendChild(host);
+  }
+
   function renderBanner(cfg: RemoteConfig) {
     const pc = cfg.prompt_config ?? {};
+    if (pc.style?.position === "modal") return renderModal(cfg);
     const text = pc.text ?? {};
     const style = pc.style ?? {};
     const accent = style.accent || "#7C3AED";

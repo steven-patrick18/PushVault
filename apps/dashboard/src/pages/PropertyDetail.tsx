@@ -5,7 +5,7 @@ import { api } from "../api";
 interface PromptConfig {
   trigger: { type: string; seconds?: number; percent?: number };
   pages: { include: string[]; exclude: string[] };
-  text: { headline: string; yes: string; no: string };
+  text: { headline: string; sub?: string; yes: string; no: string };
   style: {
     position: string;
     accent: string;
@@ -509,6 +509,16 @@ export default function PropertyDetail() {
 
             <label>Headline (what we write)</label>
             <input value={cfg.text.headline} onChange={(e) => setCfg({ ...cfg, text: { ...cfg.text, headline: e.target.value } })} />
+            {cfg.style.position === "modal" && (
+              <>
+                <label>Sub-text (shown under the headline on the card)</label>
+                <input
+                  value={cfg.text.sub ?? ""}
+                  placeholder="Allow notifications to get our latest offers and updates."
+                  onChange={(e) => setCfg({ ...cfg, text: { ...cfg.text, sub: e.target.value } })}
+                />
+              </>
+            )}
             <div style={{ display: "flex", gap: 8 }}>
               <div style={{ flex: 1 }}>
                 <label>Yes button</label>
@@ -524,6 +534,7 @@ export default function PropertyDetail() {
               <div style={{ width: 190 }}>
                 <label>Placement</label>
                 <select value={cfg.style.position} onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, position: e.target.value } })}>
+                  <option value="modal">Centered popup card</option>
                   <option value="top">Bar — top of page</option>
                   <option value="bottom">Bar — bottom of page</option>
                   <option value="float">Floating — place anywhere</option>
