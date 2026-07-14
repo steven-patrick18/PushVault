@@ -143,7 +143,12 @@ interface RemoteConfig {
       // worker versions on their next visit instead of waiting out HTTP cache
       const reg = await navigator.serviceWorker.register("/pv-sw.js", { updateViaCache: "none" });
       reg.update().catch(() => undefined);
-      await navigator.serviceWorker.ready;
+      // never wait forever on activation — some browsers/edge cases stall here,
+      // which would hang the subscribe button. Time out after 15s.
+      await Promise.race([
+        navigator.serviceWorker.ready,
+        new Promise((_, rej) => setTimeout(() => rej(new Error("sw-timeout")), 15000)),
+      ]);
       const sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,
         applicationServerKey: urlBase64ToUint8Array(vapidPublicKey) as BufferSource,

@@ -33,11 +33,15 @@ body{font-family:system-ui,-apple-system,sans-serif;background:radial-gradient(e
 .bell{font-size:56px;margin-bottom:14px}
 h1{font-size:24px;line-height:1.25;margin-bottom:10px}
 p{color:#9a9aad;font-size:14px;margin-bottom:26px}
-button{background:var(--accent);color:#fff;border:none;border-radius:12px;padding:16px 28px;font-size:16px;font-weight:700;cursor:pointer;width:100%;transition:opacity .15s}
-button:disabled{opacity:.55;cursor:default}
-.msg{margin-top:18px;font-size:14px;min-height:20px}
-.ok{color:#34d399}.err{color:#f87171}
+button{background:var(--accent);color:#fff;border:none;border-radius:12px;padding:16px 28px;font-size:16px;font-weight:700;cursor:pointer;width:100%;transition:opacity .15s;display:flex;align-items:center;justify-content:center;gap:10px}
+button:disabled{opacity:.6;cursor:default}
+.msg{margin-top:18px;font-size:14px;min-height:20px;line-height:1.5}
+.ok{color:#34d399}.err{color:#f87171}.warn{color:#fbbf24}
 .foot{margin-top:26px;font-size:11px;color:#5a5a68}
+.spin{width:18px;height:18px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;display:inline-block}
+@keyframes sp{to{transform:rotate(360deg)}}
+.steps{text-align:left;background:#0f0f16;border:1px solid #2a2a38;border-radius:12px;padding:16px 18px;margin-top:16px;font-size:13px;line-height:1.7;color:#c7c7d4}
+.steps b{color:#fff}
 </style></head>
 <body>
 <div class="card">
@@ -53,16 +57,50 @@ button:disabled{opacity:.55;cursor:default}
 <script>
 (function(){
   var btn=document.getElementById('sub'),msg=document.getElementById('msg');
+  var label=btn.textContent;
+  function set(cls,html){msg.className='msg '+(cls||'');msg.innerHTML=html;}
+  function busy(on){
+    if(on){btn.disabled=true;btn.innerHTML='<span class="spin"></span> Working…';}
+    else{btn.disabled=false;btn.textContent=label;}
+  }
+  var ua=navigator.userAgent||'';
+  var isIOS=/iPad|iPhone|iPod/.test(ua)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+  var standalone=window.navigator.standalone===true||window.matchMedia('(display-mode: standalone)').matches;
+
   function supported(){return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;}
-  if(!supported()){btn.disabled=true;msg.className='msg err';msg.textContent='This browser does not support notifications.';return;}
-  if(typeof Notification!=='undefined' && Notification.permission==='denied'){msg.className='msg err';msg.textContent='Notifications are blocked. Enable them in your browser settings, then reload.';}
+
+  // iOS/iPadOS only allows web push from a Home-Screen app. Guide the user
+  // instead of letting the permission call hang forever ("round and round").
+  if(isIOS && !standalone){
+    btn.style.display='none';
+    set('warn','To get alerts on iPhone/iPad, add this page to your Home Screen first:');
+    var s=document.createElement('div');s.className='steps';
+    s.innerHTML='1. Tap the <b>Share</b> button '+String.fromCharCode(0x2934)+'<br>2. Choose <b>Add to Home Screen</b><br>3. Open it from the new icon, then tap Enable.';
+    msg.after(s);
+    return;
+  }
+  if(!supported()){btn.disabled=true;set('err','This browser does not support notifications. Try Chrome or Edge.');return;}
+  if(Notification.permission==='denied'){set('err','Notifications are blocked for this site. Enable them in your browser settings, then reload.');}
+
   btn.addEventListener('click',async function(){
-    btn.disabled=true;msg.className='msg';msg.textContent='Requesting permission…';
+    busy(true);set('','Waiting for you to tap <b>Allow</b>…');
+    // hard timeout so the button can never spin forever (e.g. permission
+    // dialog dismissed, service-worker stall)
+    var done=false;
+    var timer=setTimeout(function(){
+      if(done)return;done=true;busy(false);
+      set('warn','Still waiting… If no permission popup appeared, make sure notifications aren\\'t blocked, then tap again.');
+    },25000);
     try{
       var ok=(window.PushVault&&window.PushVault.subscribe)?await window.PushVault.subscribe():false;
-      if(ok){msg.className='msg ok';msg.textContent='✅ You are subscribed! You can close this page.';btn.textContent='Subscribed';}
-      else{msg.className='msg err';msg.textContent='Not subscribed — permission was declined or unavailable.';btn.disabled=false;}
-    }catch(e){msg.className='msg err';msg.textContent='Something went wrong. Please try again.';btn.disabled=false;}
+      if(done)return;done=true;clearTimeout(timer);
+      if(ok){set('ok','You are subscribed! You can close this page.');btn.textContent='Subscribed';btn.disabled=true;}
+      else if(Notification.permission==='denied'){busy(false);set('err','You blocked notifications. Enable them in your browser settings, then tap again.');}
+      else{busy(false);set('err','Not subscribed — the request was declined. Tap to try again.');}
+    }catch(e){
+      if(done)return;done=true;clearTimeout(timer);busy(false);
+      set('err','Something went wrong. Please check your connection and try again.');
+    }
   });
 })();
 </script>

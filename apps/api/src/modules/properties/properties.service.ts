@@ -294,17 +294,20 @@ export class PropertiesService {
       }),
     );
 
-    const allOk = results.every((r) => r.ok);
-    const verification = { checkedAt: new Date().toISOString(), results };
+    // verified if AT LEAST ONE registered domain serves the service worker —
+    // a hosted opt-in subdomain (alerts.example.com) is enough to collect
+    // subscribers even when the main domain can't host files
+    const anyOk = results.some((r) => r.ok);
+    const verification = { checkedAt: new Date().toISOString(), results, anyOk };
     await this.db(user).property.update({
       where: { id },
       data: {
         verification: verification as any,
-        verifiedAt: allOk ? new Date() : null,
+        verifiedAt: anyOk ? new Date() : null,
       },
     });
-    await this.audit(user, "property.verify", id, null, { allOk });
-    return { verified: allOk, ...verification };
+    await this.audit(user, "property.verify", id, null, { anyOk });
+    return { verified: anyOk, ...verification };
   }
 
   /** Pages discovered by the snippet beacon, with allow/block state. */
