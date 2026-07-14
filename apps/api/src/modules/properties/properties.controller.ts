@@ -110,6 +110,16 @@ export class PropertiesController {
     return this.properties.verify(user, id);
   }
 
+  /** One-click hosted opt-in page: check DNS → register subdomain → warm cert */
+  @Post(":id/hosted-domain")
+  activateHostedDomain(
+    @CurrentUser() user: AuthUser,
+    @Param("id", ParseUUIDPipe) id: string,
+    @Body() body: { domain: string },
+  ) {
+    return this.properties.activateHostedDomain(user, id, String(body?.domain ?? ""));
+  }
+
   @Post(":id/generate-vapid")
   generateVapid(@CurrentUser() user: AuthUser, @Param("id", ParseUUIDPipe) id: string) {
     return this.properties.generateVapid(user, id);

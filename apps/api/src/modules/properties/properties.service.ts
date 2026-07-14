@@ -7,6 +7,7 @@ import { PrismaService } from "../../infra/prisma.service";
 import { generateKey, hashApiKey } from "../../common/crypto";
 import { AuthUser } from "../../common/auth.guard";
 import * as webpush from "web-push";
+import { resolve4 } from "node:dns/promises";
 
 const DEFAULT_PROMPT_CONFIG = {
   trigger: { type: "delay", seconds: 12 },
@@ -124,6 +125,89 @@ export class PropertiesService {
     });
     await this.audit(user, "property.update", id, { name: before.name }, data);
     return this.serialize(property);
+  }
+
+  /**
+   * Self-serve hosted opt-in activation. Checks the subdomain's DNS points at
+   * this server; if so, adds it to the property's domains (which is what the
+   * TLS gate, host resolution and Origin validation all check) and warms the
+   * HTTPS certificate with a first request. Admins and managers can run it —
+   * one button in the dashboard instead of an ops task.
+   */
+  async activateHostedDomain(user: AuthUser, id: string, rawDomain: string) {
+    const domain = normalizeDomain(rawDomain);
+    if (!domain || !domain.includes(".") || /[^a-z0-9.-]/.test(domain)) {
+      throw new BadRequestException("Enter a full subdomain, e.g. alerts.yourdomain.com");
+    }
+    const property = await this.db(user).property.findUnique({ where: { id } });
+    if (!property) throw new NotFoundException("Property not found");
+
+    // where the DNS A record should point: explicit env, else wherever the
+    // dashboard domain itself resolves (same server)
+    let expectedIps: string[] = [];
+    if (process.env.SERVER_PUBLIC_IP) {
+      expectedIps = [process.env.SERVER_PUBLIC_IP.trim()];
+    } else if (process.env.PUSH_DOMAIN) {
+      try {
+        expectedIps = await resolve4(process.env.PUSH_DOMAIN);
+      } catch {
+        expectedIps = [];
+      }
+    }
+
+    let resolvedIps: string[] = [];
+    let dnsStatus: "ok" | "wrong-ip" | "not-found" = "not-found";
+    try {
+      resolvedIps = await resolve4(domain);
+      dnsStatus =
+        expectedIps.length === 0 || resolvedIps.some((ip) => expectedIps.includes(ip))
+          ? "ok"
+          : "wrong-ip";
+    } catch {
+      dnsStatus = "not-found";
+    }
+
+    const alreadyAdded = property.domains.includes(domain);
+    if (dnsStatus === "ok" && !alreadyAdded) {
+      await this.db(user).property.update({
+        where: { id },
+        data: { domains: [...property.domains, domain] },
+      });
+      await this.audit(user, "property.hosted_domain", id, null, { domain });
+    }
+
+    // warm the certificate: the first HTTPS request makes Caddy issue it
+    // on demand, so the first visitor never waits on ACME
+    let certificate: "issued" | "pending" = "pending";
+    if (dnsStatus === "ok") {
+      try {
+        const r = await fetch(`https://${domain}/`, {
+          signal: AbortSignal.timeout(20_000),
+          redirect: "manual",
+        });
+        if (r.status > 0) certificate = "issued";
+      } catch {
+        certificate = "pending";
+      }
+    }
+
+    return {
+      domain,
+      url: `https://${domain}/`,
+      dnsStatus,
+      resolvedIps,
+      expectedIps,
+      active: dnsStatus === "ok",
+      certificate,
+      message:
+        dnsStatus === "ok"
+          ? certificate === "issued"
+            ? "Live! The hosted opt-in page is active with HTTPS."
+            : "DNS is pointed and the domain is registered — HTTPS finishes on the first visit (usually seconds)."
+          : dnsStatus === "wrong-ip"
+            ? `DNS points to ${resolvedIps.join(", ")} but should point to ${expectedIps.join(", ")}. Fix the A record and try again.`
+            : "DNS record not found yet. Add the A record, wait a few minutes for propagation, then press Activate again.",
+    };
   }
 
   /** Delete a property. Refuses if it still has subscribers or campaigns. */

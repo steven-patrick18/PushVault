@@ -82,6 +82,9 @@ export default function PropertyDetail() {
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
   const [guide, setGuide] = useState<"html" | "wordpress" | "shopify" | "hosted">("html");
+  const [hostedDomain, setHostedDomain] = useState("");
+  const [hostedBusy, setHostedBusy] = useState(false);
+  const [hostedResult, setHostedResult] = useState<any>(null);
   const [previewDevice, setPreviewDevice] = useState<"desktop" | "mac" | "tablet" | "android" | "iphone">("desktop");
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null);
@@ -294,24 +297,69 @@ export default function PropertyDetail() {
           </>
         )}
 
-        {guide === "hosted" && (
-          <>
-            <div className="page-sub">
-              Best for site builders (Hostinger, Wix, Shopify) where you can't upload files. PushVault
-              hosts a branded opt-in page on a subdomain you own — no snippet, no file upload.
-            </div>
-            <label>Step 1 — point a subdomain at the PushVault server (DNS A record)</label>
-            <div className="code-block">{`alerts.${(property.domains[0] || "yourdomain.com").replace(/^www\./, "")}   A   192.255.142.123`}</div>
-            <label>Step 2 — add that subdomain to this property's domains (below, in the property settings)</label>
-            <div className="code-block">{`alerts.${(property.domains[0] || "yourdomain.com").replace(/^www\./, "")}`}</div>
-            <label>Step 3 — share / link this URL (HTTPS is issued automatically)</label>
-            <div className="code-block">{`https://alerts.${(property.domains[0] || "yourdomain.com").replace(/^www\./, "")}/`}</div>
-            <div className="page-sub" style={{ marginBottom: 0 }}>
-              Put a "🔔 Get alerts" button on your main site linking to that page. Visitors who tap
-              Enable become subscribers of this property — all campaigns, drips and CDR work exactly the same.
-            </div>
-          </>
-        )}
+        {guide === "hosted" && (() => {
+          const base = (property.domains[0] || "yourdomain.com").replace(/^www\./, "");
+          const suggested = `alerts.${base}`;
+          const value = hostedDomain || suggested;
+          const activate = async () => {
+            setHostedBusy(true);
+            setHostedResult(null);
+            try {
+              const r = await api(`/properties/${id}/hosted-domain`, {
+                method: "POST",
+                body: JSON.stringify({ domain: value }),
+              });
+              setHostedResult(r);
+              if (r?.active) setProperty(await api(`/properties/${id}`));
+            } catch (e: any) {
+              setHostedResult({ active: false, message: e?.message || "Failed — try again." });
+            } finally {
+              setHostedBusy(false);
+            }
+          };
+          return (
+            <>
+              <div className="page-sub">
+                Best for site builders (Hostinger, Wix, Shopify) where you can't upload files. PushVault
+                hosts a branded opt-in page (your prompt design) on a subdomain you own — no snippet, no file upload.
+              </div>
+              <label>Step 1 — in your DNS panel, point a subdomain at the PushVault server</label>
+              <div className="code-block">{`Type: A    Name: ${value.split(".")[0]}    Points to: 192.255.142.123`}</div>
+              <label>Step 2 — enter the subdomain and press Activate (checks DNS, registers it, issues HTTPS)</label>
+              <div style={{ display: "flex", gap: 8 }}>
+                <input
+                  style={{ flex: 1 }}
+                  value={value}
+                  onChange={(e) => setHostedDomain(e.target.value)}
+                  placeholder={suggested}
+                />
+                <button className="btn" disabled={hostedBusy} onClick={activate}>
+                  {hostedBusy ? "Checking…" : "⚡ Activate"}
+                </button>
+              </div>
+              {hostedResult && (
+                <div
+                  className="page-sub"
+                  style={{ marginTop: 10, color: hostedResult.active ? "#34d399" : "#fbbf24" }}
+                >
+                  {hostedResult.active ? "✅ " : "⏳ "}
+                  {hostedResult.message}
+                  {hostedResult.active && (
+                    <>
+                      {" "}Your opt-in page: <a href={hostedResult.url} target="_blank" rel="noreferrer" style={{ color: "#a78bfa" }}>{hostedResult.url}</a>
+                    </>
+                  )}
+                </div>
+              )}
+              <label style={{ marginTop: 14 }}>Step 3 — link to it from your site</label>
+              <div className="code-block">{`<a href="https://${value}/">🔔 Get alerts &amp; offers</a>`}</div>
+              <div className="page-sub" style={{ marginBottom: 0 }}>
+                Visitors who tap Enable become subscribers of this property — campaigns, drips and CDR
+                work exactly the same. DNS changes can take a few minutes; just press Activate again.
+              </div>
+            </>
+          );
+        })()}
 
         <label>Revenue tracking (optional) — call after a completed order</label>
         <div className="code-block">
