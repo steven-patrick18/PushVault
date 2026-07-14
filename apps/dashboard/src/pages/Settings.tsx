@@ -53,6 +53,8 @@ export default function Settings() {
   const [showAddUser, setShowAddUser] = useState(false);
   const [newUser, setNewUser] = useState({ email: "", password: "", role: "manager", propertyIds: [] as string[] });
   const [rates, setRates] = useState({ per_send: "0", per_click: "0", currency: "INR" });
+  const [gads, setGads] = useState<any>(null);
+  const [gadsSaving, setGadsSaving] = useState(false);
 
   const load = () => {
     api<Tenant>("/tenant").then(setTenant).catch((e) => setError(e.message));
@@ -67,6 +69,7 @@ export default function Settings() {
       });
     }).catch(() => {});
     api<{ id: string; name: string }[]>("/properties").then(setProperties).catch(() => {});
+    api("/google-ads/config").then(setGads).catch(() => {});
   };
   useEffect(load, []);
 
@@ -255,6 +258,80 @@ export default function Settings() {
         <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 8 }}>
           Every campaign has a CDR (per-lead record with cost) on its page — export as CSV for invoicing clients.
         </div>
+      </div>
+
+      <div className="panel">
+        <div className="flex-between">
+          <h3>📢 Google Ads integration</h3>
+          <span className={"badge " + (gads?.connected ? "green" : "gray")}>
+            {gads?.connected ? "Connected" : "Not connected"}
+          </span>
+        </div>
+        <div className="page-sub">
+          Connect once here; then every property gets a "Google norms" compliance check and a
+          create-ad-campaign panel. Get credentials at{" "}
+          <a href="https://developers.google.com/google-ads/api/docs/get-started/introduction" target="_blank" rel="noreferrer" style={{ color: "var(--accent)" }}>
+            Google Ads API get-started
+          </a>{" "}
+          (developer token from your MCC → API Center; OAuth client + refresh token from Google Cloud Console).
+        </div>
+        {gads && (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div>
+                <label>Developer token</label>
+                <input value={gads.developerToken ?? ""} placeholder="from MCC → API Center"
+                  onChange={(e) => setGads({ ...gads, developerToken: e.target.value })} />
+              </div>
+              <div>
+                <label>Customer ID (the ad account, e.g. 123-456-7890)</label>
+                <input value={gads.customerId ?? ""} placeholder="1234567890"
+                  onChange={(e) => setGads({ ...gads, customerId: e.target.value })} />
+              </div>
+              <div>
+                <label>OAuth client ID</label>
+                <input value={gads.clientId ?? ""} placeholder="xxx.apps.googleusercontent.com"
+                  onChange={(e) => setGads({ ...gads, clientId: e.target.value })} />
+              </div>
+              <div>
+                <label>OAuth client secret</label>
+                <input value={gads.clientSecret ?? ""} placeholder="GOCSPX-…"
+                  onChange={(e) => setGads({ ...gads, clientSecret: e.target.value })} />
+              </div>
+              <div>
+                <label>Refresh token</label>
+                <input value={gads.refreshToken ?? ""} placeholder="1//…"
+                  onChange={(e) => setGads({ ...gads, refreshToken: e.target.value })} />
+              </div>
+              <div>
+                <label>Manager (MCC) ID — only if the account is under a manager</label>
+                <input value={gads.loginCustomerId ?? ""} placeholder="optional"
+                  onChange={(e) => setGads({ ...gads, loginCustomerId: e.target.value })} />
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+              <button className="btn" disabled={gadsSaving} onClick={async () => {
+                setGadsSaving(true); setError(""); setMsg("");
+                try {
+                  const r = await api("/google-ads/config", { method: "PUT", body: JSON.stringify(gads) });
+                  setGads(r);
+                  setMsg("Google Ads connected — open any property to run the compliance check or create ads.");
+                } catch (e: any) { setError(e.message); } finally { setGadsSaving(false); }
+              }}>
+                {gadsSaving ? "Saving…" : gads.connected ? "Update credentials" : "Connect Google Ads"}
+              </button>
+              {gads.connected && (
+                <button className="btn secondary" onClick={async () => {
+                  if (!confirm("Disconnect Google Ads? Stored credentials will be deleted.")) return;
+                  await api("/google-ads/config", { method: "DELETE" });
+                  load();
+                }}>
+                  Disconnect
+                </button>
+              )}
+            </div>
+          </>
+        )}
       </div>
 
       <div className="panel">

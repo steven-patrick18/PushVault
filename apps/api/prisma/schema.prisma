@@ -66,6 +66,7 @@ model Tenant {
   customDomain      String?   @map("custom_domain")
   plan              String    @default("internal")
   billingRates      Json?     @map("billing_rates") // {per_send, per_click, currency}
+  integrations      Json?     // {google_ads: {developerToken, clientId, clientSecret, refreshToken, customerId, loginCustomerId, apiVersion}}
   status            String    @default("active")
   createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt         DateTime? @updatedAt @map("updated_at") @db.Timestamptz()
@@ -116,6 +117,7 @@ model Property {
   apiKeyHash          String?   @map("api_key_hash")
   verifiedAt          DateTime? @map("verified_at") @db.Timestamptz()
   verification        Json?
+  adsCheck            Json?     @map("ads_check") // last Google-norms compliance check {verdict, checks:[...], at}
   createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt           DateTime? @updatedAt @map("updated_at") @db.Timestamptz()
 

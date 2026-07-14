@@ -85,6 +85,16 @@ export default function PropertyDetail() {
   const [hostedDomain, setHostedDomain] = useState("");
   const [hostedBusy, setHostedBusy] = useState(false);
   const [hostedResult, setHostedResult] = useState<any>(null);
+  // Google Ads: compliance check + campaign creation
+  const [adsConnected, setAdsConnected] = useState<boolean | null>(null);
+  const [adsCheck, setAdsCheck] = useState<any>(null);
+  const [adsBusy, setAdsBusy] = useState("");
+  const [adsResult, setAdsResult] = useState<any>(null);
+  const [adsCampaigns, setAdsCampaigns] = useState<any[] | null>(null);
+  const [adsForm, setAdsForm] = useState({
+    name: "", dailyBudget: "500", finalUrl: "", cpcBid: "5",
+    headlines: "", descriptions: "", keywords: "",
+  });
   const [previewDevice, setPreviewDevice] = useState<"desktop" | "mac" | "tablet" | "android" | "iphone">("desktop");
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null);
@@ -143,6 +153,7 @@ export default function PropertyDetail() {
   const load = useCallback(() => {
     api<Property>(`/properties/${id}`).then((p) => {
       setProperty(p);
+      setAdsCheck((p as any).adsCheck ?? null);
       setCfg({ ...DEFAULT_CFG, ...p.promptConfig,
         trigger: { ...DEFAULT_CFG.trigger, ...p.promptConfig?.trigger },
         pages: { ...DEFAULT_CFG.pages, ...p.promptConfig?.pages },
@@ -159,6 +170,8 @@ export default function PropertyDetail() {
       });
     }).catch((e) => setError(e.message));
     api<PageRow[]>(`/properties/${id}/pages`).then(setPages).catch(() => {});
+    // 403 for operators/clients → panel shows the read-only state
+    api<any>("/google-ads/config").then((c) => setAdsConnected(Boolean(c?.connected))).catch(() => setAdsConnected(null));
   }, [id]);
 
   useEffect(load, [load]);
@@ -926,6 +939,202 @@ export default function PropertyDetail() {
             Save caps
           </button>
         </div>
+      </div>
+
+      <div className="panel">
+        <div className="flex-between">
+          <h3>5 · Google Ads — get traffic on this website</h3>
+          {adsConnected !== null && (
+            <span className={"badge " + (adsConnected ? "green" : "gray")}>
+              {adsConnected ? "API connected" : "API not connected"}
+            </span>
+          )}
+        </div>
+
+        <label>Step 1 — check this site against Google's ad norms</label>
+        <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+          <button
+            className="btn secondary"
+            disabled={adsBusy === "check"}
+            onClick={async () => {
+              setAdsBusy("check");
+              try {
+                setAdsCheck(await api(`/google-ads/check/${id}`, { method: "POST" }));
+              } catch (e: any) {
+                setError(e.message);
+              } finally {
+                setAdsBusy("");
+              }
+            }}
+          >
+            {adsBusy === "check" ? "Checking…" : "🔍 Run compliance check"}
+          </button>
+          {adsCheck && (
+            <span
+              className={
+                "badge " +
+                (adsCheck.verdict === "ready" ? "green" : adsCheck.verdict === "ready-with-warnings" ? "purple" : "red")
+              }
+            >
+              {adsCheck.verdict === "ready"
+                ? "✅ Ready for Google Ads"
+                : adsCheck.verdict === "ready-with-warnings"
+                  ? `⚠️ OK with ${adsCheck.warns} warning(s)`
+                  : `❌ ${adsCheck.fails} issue(s) to fix first`}
+            </span>
+          )}
+          {adsCheck?.at && (
+            <span style={{ fontSize: 11, color: "var(--text-dim)" }}>
+              last checked {new Date(adsCheck.at).toLocaleString()}
+            </span>
+          )}
+        </div>
+        {adsCheck?.checks && (
+          <table style={{ marginTop: 10 }}>
+            <tbody>
+              {adsCheck.checks.map((c: any) => (
+                <tr key={c.id}>
+                  <td style={{ width: 30 }}>{c.status === "pass" ? "✅" : c.status === "warn" ? "⚠️" : "❌"}</td>
+                  <td style={{ whiteSpace: "nowrap" }}>{c.label}</td>
+                  <td style={{ color: "var(--text-dim)", fontSize: 12 }}>{c.detail}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+
+        <label style={{ marginTop: 16 }}>Step 2 — create a Search ad campaign for this site</label>
+        {adsConnected === false && (
+          <div className="page-sub" style={{ marginBottom: 0 }}>
+            Connect the Google Ads API in <b>Settings → Google Ads integration</b> first, then create ads here.
+          </div>
+        )}
+        {adsConnected === null && (
+          <div className="page-sub" style={{ marginBottom: 0 }}>
+            Ask an admin or manager — your role can't manage Google Ads.
+          </div>
+        )}
+        {adsConnected && (
+          <>
+            <div style={{ display: "grid", gridTemplateColumns: "2fr 1fr 1fr", gap: 12 }}>
+              <div>
+                <label>Campaign name</label>
+                <input value={adsForm.name} placeholder={property.name}
+                  onChange={(e) => setAdsForm({ ...adsForm, name: e.target.value })} />
+              </div>
+              <div>
+                <label>Daily budget (account currency)</label>
+                <input type="number" min={1} value={adsForm.dailyBudget}
+                  onChange={(e) => setAdsForm({ ...adsForm, dailyBudget: e.target.value })} />
+              </div>
+              <div>
+                <label>Max cost-per-click</label>
+                <input type="number" min={0.05} step="0.5" value={adsForm.cpcBid}
+                  onChange={(e) => setAdsForm({ ...adsForm, cpcBid: e.target.value })} />
+              </div>
+            </div>
+            <label>Landing URL</label>
+            <input value={adsForm.finalUrl} placeholder={`https://${property.domains[0]}/`}
+              onChange={(e) => setAdsForm({ ...adsForm, finalUrl: e.target.value })} />
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+              <div>
+                <label>Headlines — one per line, min 3, max 30 chars each</label>
+                <textarea rows={4} value={adsForm.headlines}
+                  placeholder={`${property.name}\nBest deals today\nCall now & save`}
+                  onChange={(e) => setAdsForm({ ...adsForm, headlines: e.target.value })} />
+              </div>
+              <div>
+                <label>Descriptions — one per line, min 2, max 90 chars each</label>
+                <textarea rows={4} value={adsForm.descriptions}
+                  placeholder={"Trusted service with instant support.\nLimited-time offers — visit now."}
+                  onChange={(e) => setAdsForm({ ...adsForm, descriptions: e.target.value })} />
+              </div>
+            </div>
+            <label>Keywords — comma separated (phrase match)</label>
+            <input value={adsForm.keywords} placeholder="cheap calls, international calling, voip service"
+              onChange={(e) => setAdsForm({ ...adsForm, keywords: e.target.value })} />
+            <div style={{ display: "flex", gap: 10, alignItems: "center", marginTop: 12 }}>
+              <button
+                className="btn"
+                disabled={adsBusy === "create"}
+                onClick={async () => {
+                  setAdsBusy("create");
+                  setAdsResult(null);
+                  try {
+                    const r = await api(`/google-ads/campaigns/${id}`, {
+                      method: "POST",
+                      body: JSON.stringify({
+                        name: adsForm.name || property.name,
+                        dailyBudget: Number(adsForm.dailyBudget) || 1,
+                        cpcBid: Number(adsForm.cpcBid) || undefined,
+                        finalUrl: adsForm.finalUrl || undefined,
+                        headlines: adsForm.headlines.split("\n").map((s) => s.trim()).filter(Boolean),
+                        descriptions: adsForm.descriptions.split("\n").map((s) => s.trim()).filter(Boolean),
+                        keywords: adsForm.keywords.split(",").map((s) => s.trim()).filter(Boolean),
+                      }),
+                    });
+                    setAdsResult(r);
+                  } catch (e: any) {
+                    setAdsResult({ ok: false, message: e.message });
+                  } finally {
+                    setAdsBusy("");
+                  }
+                }}
+              >
+                {adsBusy === "create" ? "Creating…" : "📢 Create ad campaign (paused)"}
+              </button>
+              <button
+                className="btn secondary"
+                disabled={adsBusy === "list"}
+                onClick={async () => {
+                  setAdsBusy("list");
+                  try {
+                    const r = await api<any>("/google-ads/campaigns");
+                    setAdsCampaigns(r.campaigns ?? []);
+                  } catch (e: any) {
+                    setError(e.message);
+                  } finally {
+                    setAdsBusy("");
+                  }
+                }}
+              >
+                {adsBusy === "list" ? "Loading…" : "📊 Show account campaigns"}
+              </button>
+            </div>
+            {adsResult && (
+              <div className="page-sub" style={{ marginTop: 10, marginBottom: 0, color: adsResult.ok ? "#34d399" : "#f87171" }}>
+                {adsResult.ok ? "✅ " : "❌ "}
+                {adsResult.message}
+              </div>
+            )}
+            {adsCampaigns && (
+              <table style={{ marginTop: 12 }}>
+                <thead>
+                  <tr><th>Campaign</th><th>Status</th><th>Daily budget</th><th>Impressions</th><th>Clicks</th><th>Cost (30d)</th></tr>
+                </thead>
+                <tbody>
+                  {adsCampaigns.length === 0 && (
+                    <tr><td colSpan={6} style={{ color: "var(--text-dim)" }}>No campaigns in the account yet.</td></tr>
+                  )}
+                  {adsCampaigns.map((c: any) => (
+                    <tr key={c.id}>
+                      <td>{c.name}</td>
+                      <td><span className={"badge " + (c.status === "ENABLED" ? "green" : "gray")}>{c.status}</span></td>
+                      <td>{c.dailyBudget.toLocaleString()}</td>
+                      <td>{c.impressions.toLocaleString()}</td>
+                      <td>{c.clicks.toLocaleString()}</td>
+                      <td>{c.cost.toLocaleString()}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
+            <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 10 }}>
+              Campaigns are created <b>paused</b> so nothing spends until you review and enable them in
+              Google Ads. Run the compliance check first — ads pointing to non-compliant pages get disapproved.
+            </div>
+          </>
+        )}
       </div>
     </>
   );
