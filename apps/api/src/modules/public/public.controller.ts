@@ -106,6 +106,17 @@ export class PublicController {
     return this.service.getPromptConfig(propertyKey, origin);
   }
 
+  /**
+   * Caddy on-demand-TLS gate: only issue a certificate for a host that is a
+   * registered active property domain (prevents anyone pointing DNS at us and
+   * minting certs). Returns 200 to approve, 404 to refuse.
+   */
+  @Get("tls-check")
+  async tlsCheck(@Query("domain") domain: string, @Res() res: Response) {
+    const property = await this.service.propertyByHost(domain);
+    res.status(property ? 200 : 404).send(property ? "ok" : "no");
+  }
+
   @Post("subscribe")
   @HttpCode(201)
   @RateLimit({ limit: 10, windowSec: 60, perProperty: true })

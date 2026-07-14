@@ -55,6 +55,17 @@ export class PublicService {
     return property;
   }
 
+  /** Find a property by one of its registered domains (bare host match). */
+  async propertyByHost(host: string | undefined) {
+    if (!host) return null;
+    const bare = host.toLowerCase().split(":")[0];
+    // exact host match, then bare hostname (drop port) — same rule as origin check
+    const all = await this.prisma.system.property.findMany({ where: { status: "active" } });
+    return (
+      all.find((p) => p.domains.some((d) => d === host || d === bare)) ?? null
+    );
+  }
+
   async getPromptConfig(propertyKey: string, origin: string | undefined) {
     const property = await this.resolveProperty(propertyKey, origin);
     return {

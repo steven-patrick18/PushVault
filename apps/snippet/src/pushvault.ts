@@ -332,6 +332,8 @@ interface RemoteConfig {
   }
 
   async function init() {
+    // hosted opt-in pages render their own button — no auto banner there
+    if ((window as any).__PV_NO_PROMPT) return;
     // pageview is beaconed once at startup (line ~58) for all browsers
     const prior = getChoice();
     if (prior) {

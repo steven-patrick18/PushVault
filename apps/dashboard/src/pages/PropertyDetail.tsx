@@ -81,7 +81,7 @@ export default function PropertyDetail() {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState("");
   const [error, setError] = useState("");
-  const [guide, setGuide] = useState<"html" | "wordpress" | "shopify">("html");
+  const [guide, setGuide] = useState<"html" | "wordpress" | "shopify" | "hosted">("html");
   const [previewDevice, setPreviewDevice] = useState<"desktop" | "mac" | "tablet" | "android" | "iphone">("desktop");
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null);
@@ -250,9 +250,9 @@ export default function PropertyDetail() {
         <div className="code-block">{property.propertyKey}</div>
 
         <div style={{ display: "flex", gap: 6, margin: "14px 0 4px" }}>
-          {(["html", "wordpress", "shopify"] as const).map((g) => (
+          {(["html", "wordpress", "shopify", "hosted"] as const).map((g) => (
             <button key={g} className={"btn small " + (guide === g ? "" : "secondary")} onClick={() => setGuide(g)}>
-              {g === "html" ? "🌐 Any website" : g === "wordpress" ? "🅦 WordPress" : "🛍 Shopify"}
+              {g === "html" ? "🌐 Any website" : g === "wordpress" ? "🅦 WordPress" : g === "shopify" ? "🛍 Shopify" : "✨ Hosted page"}
             </button>
           ))}
         </div>
@@ -290,6 +290,25 @@ export default function PropertyDetail() {
             </div>
             <div className="page-sub" style={{ marginBottom: 0 }}>
               Note: web push requires the service worker on the SAME domain visitors browse. Shopify's asset CDN (cdn.shopify.com) does not qualify.
+            </div>
+          </>
+        )}
+
+        {guide === "hosted" && (
+          <>
+            <div className="page-sub">
+              Best for site builders (Hostinger, Wix, Shopify) where you can't upload files. PushVault
+              hosts a branded opt-in page on a subdomain you own — no snippet, no file upload.
+            </div>
+            <label>Step 1 — point a subdomain at the PushVault server (DNS A record)</label>
+            <div className="code-block">{`alerts.${(property.domains[0] || "yourdomain.com").replace(/^www\./, "")}   A   192.255.142.123`}</div>
+            <label>Step 2 — add that subdomain to this property's domains (below, in the property settings)</label>
+            <div className="code-block">{`alerts.${(property.domains[0] || "yourdomain.com").replace(/^www\./, "")}`}</div>
+            <label>Step 3 — share / link this URL (HTTPS is issued automatically)</label>
+            <div className="code-block">{`https://alerts.${(property.domains[0] || "yourdomain.com").replace(/^www\./, "")}/`}</div>
+            <div className="page-sub" style={{ marginBottom: 0 }}>
+              Put a "🔔 Get alerts" button on your main site linking to that page. Visitors who tap
+              Enable become subscribers of this property — all campaigns, drips and CDR work exactly the same.
             </div>
           </>
         )}
