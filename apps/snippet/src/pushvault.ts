@@ -58,9 +58,24 @@ interface RemoteConfig {
   // page discovery works everywhere, even where push is unsupported
   beaconPageview();
 
-  // 6. unsupported browser or already-denied permission: never render
-  if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) return;
-  if (Notification.permission === "denied") return;
+  // iOS/iPadOS Safari only allows web push from a Home-Screen (installed) app —
+  // regular Safari has no PushManager at all. We can't subscribe there, but we
+  // CAN show an "Add to Home Screen" guide so those visitors aren't a dead end.
+  const _ua = navigator.userAgent || "";
+  const isIOS =
+    /iPad|iPhone|iPod/.test(_ua) ||
+    (navigator.platform === "MacIntel" && (navigator as any).maxTouchPoints > 1);
+  const standalone =
+    (navigator as any).standalone === true ||
+    (window.matchMedia && window.matchMedia("(display-mode: standalone)").matches);
+  const iosNeedsInstall = isIOS && !standalone;
+
+  // 6. unsupported browser or already-denied permission: never render — EXCEPT
+  // iOS-needs-install, which still shows the guide banner.
+  if (!iosNeedsInstall) {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window) || !("Notification" in window)) return;
+    if (Notification.permission === "denied") return;
+  }
 
   function getChoice(): { choice: string; ts: number } | null {
     try {
@@ -249,7 +264,12 @@ interface RemoteConfig {
     noBtn.textContent = text.no || "No thanks";
 
     const remove = () => host.remove();
+    if (iosNeedsInstall) yesBtn.textContent = "📲 " + (text.yes || "Enable");
     yesBtn.addEventListener("click", async () => {
+      if (iosNeedsInstall) {
+        showIosSteps(shadow.querySelector(".pv-card") as HTMLElement, textColor, accent);
+        return;
+      }
       yesBtn.disabled = true;
       yesBtn.textContent = "…";
       remove();
@@ -261,6 +281,26 @@ interface RemoteConfig {
     host.addEventListener("click", (e) => { if (e.target === host) dismiss(); });
 
     document.documentElement.appendChild(host);
+  }
+
+  // iOS Safari can't subscribe; guide the visitor to install to the Home Screen
+  // (the only place iOS allows web push). Swaps the prompt content in-place.
+  function showIosSteps(container: HTMLElement, textColor: string, accent: string) {
+    if (!container) return;
+    container.innerHTML =
+      '<div style="text-align:left;font:14px/1.6 system-ui,sans-serif;color:' + textColor + '">' +
+      '<div style="font-weight:700;font-size:15px;margin-bottom:8px">📲 Add to your Home Screen to get alerts</div>' +
+      '1. Tap the <b>Share</b> button ' + String.fromCharCode(0x2934) + '<br>' +
+      "2. Choose <b>Add to Home Screen</b><br>" +
+      "3. Open the app from your Home Screen, then tap Enable." +
+      '<button class="pv-ok" style="margin-top:14px;background:' + accent +
+      ';color:#fff;border:none;border-radius:10px;padding:10px 18px;font-weight:600;cursor:pointer">Got it</button>' +
+      "</div>";
+    const ok = container.querySelector(".pv-ok") as HTMLButtonElement;
+    if (ok) ok.addEventListener("click", () => {
+      const root = container.getRootNode() as ShadowRoot;
+      (root.host as HTMLElement)?.remove();
+    });
   }
 
   function renderBanner(cfg: RemoteConfig) {
@@ -337,7 +377,12 @@ interface RemoteConfig {
     noBtn.textContent = text.no || "No thanks";
 
     const remove = () => host.remove();
+    if (iosNeedsInstall) yesBtn.textContent = "📲 " + (text.yes || "Enable");
     yesBtn.addEventListener("click", async () => {
+      if (iosNeedsInstall) {
+        showIosSteps(shadow.querySelector(".pv-bar") as HTMLElement, textColor, accent);
+        return;
+      }
       yesBtn.disabled = true;
       yesBtn.textContent = "…";
       remove();
