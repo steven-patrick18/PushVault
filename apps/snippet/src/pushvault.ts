@@ -52,7 +52,8 @@ interface RemoteConfig {
 
   const LS_CHOICE = "pv_choice_" + propertyKey;
   const LS_CONFIG = "pv_cfg_" + propertyKey;
-  const CONFIG_TTL = 3600_000; // 1h
+  // fetched at most once per page load, then reused for this view
+  let configPromise: Promise<RemoteConfig | null> | null = null;
 
   // page discovery works everywhere, even where push is unsupported
   beaconPageview();
@@ -78,29 +79,39 @@ interface RemoteConfig {
     }
   }
 
-  async function fetchConfig(): Promise<RemoteConfig | null> {
-    try {
-      const cached = localStorage.getItem(LS_CONFIG);
-      if (cached) {
-        const { ts, data } = JSON.parse(cached);
-        if (Date.now() - ts < CONFIG_TTL) return data;
-      }
-    } catch {
-      /* ignore */
-    }
-    try {
-      const res = await fetch(API + "/prompt-config?property_key=" + encodeURIComponent(propertyKey!));
-      if (!res.ok) return null;
-      const data = (await res.json()) as RemoteConfig;
+  /**
+   * Load the prompt design. Always fetches the latest from the server (once
+   * per page load, memoized) so design changes saved in the dashboard take
+   * effect on the very next page load — no 1-hour cache lag. The stored copy
+   * is only a fallback for when the network/API is unreachable, so the banner
+   * still works offline.
+   */
+  function fetchConfig(): Promise<RemoteConfig | null> {
+    if (configPromise) return configPromise;
+    configPromise = (async () => {
       try {
-        localStorage.setItem(LS_CONFIG, JSON.stringify({ ts: Date.now(), data }));
+        const res = await fetch(API + "/prompt-config?property_key=" + encodeURIComponent(propertyKey!));
+        if (res.ok) {
+          const data = (await res.json()) as RemoteConfig;
+          try {
+            localStorage.setItem(LS_CONFIG, JSON.stringify({ ts: Date.now(), data }));
+          } catch {
+            /* ignore */
+          }
+          return data;
+        }
+      } catch {
+        /* network/API down → fall back to last-known config below */
+      }
+      try {
+        const cached = localStorage.getItem(LS_CONFIG);
+        if (cached) return JSON.parse(cached).data as RemoteConfig;
       } catch {
         /* ignore */
       }
-      return data;
-    } catch {
       return null;
-    }
+    })();
+    return configPromise;
   }
 
   function pageMatches(pages?: PromptConfig["pages"]): boolean {

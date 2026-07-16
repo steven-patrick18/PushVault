@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Get,
+  Header,
   Headers,
   HttpCode,
   Ip,
@@ -98,6 +99,7 @@ export class PublicController {
   constructor(private readonly service: PublicService) {}
 
   @Get("prompt-config")
+  @Header("Cache-Control", "no-store")
   @RateLimit({ limit: 60, windowSec: 60 })
   promptConfig(
     @Query("property_key") propertyKey: string,
