@@ -547,7 +547,10 @@ export class CampaignRunnerService implements OnModuleInit {
       // their already-delivered rows (0 at queue time) and every one blasts,
       // blowing past the cap. Queued rows created this window count too.
       const ids = batch.map((s) => s.id);
-      const capStatuses: any = ["queued", "sending", "sent"];
+      // Send rows are queued → sent/failed/expired (there is no "sending"
+      // SendStatus — that's a Campaign status). Count queued (in-flight) + sent
+      // (delivered) against the cap; both represent a push the lead will/did get.
+      const capStatuses: any = ["queued", "sent"];
       const [dayCounts, weekCounts] = await Promise.all([
         db.send.groupBy({
           by: ["subscriberId"],

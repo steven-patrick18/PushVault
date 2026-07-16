@@ -81,6 +81,9 @@ services:
       # host-based routing (dashboard vs hosted opt-in pages) + DNS check
       PUSH_DOMAIN: ${PUSH_DOMAIN}
       SERVER_PUBLIC_IP: ${SERVER_PUBLIC_IP:-}
+      # deployed commit for the Updates page (set at runtime from GIT_SHA so it's
+      # stamped even if the build layer was cached)
+      PUSHVAULT_COMMIT: ${GIT_SHA:-}
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY}
       VAPID_SUBJECT: ${VAPID_SUBJECT}
