@@ -137,7 +137,19 @@ button.no{background:transparent;color:${subColor};border:1px solid ${cardBorder
     try{
       var ok=(window.PushVault&&window.PushVault.subscribe)?await window.PushVault.subscribe():false;
       if(done)return;done=true;clearTimeout(timer);
-      if(ok){set('ok','You are subscribed! You can close this page.');btn.textContent='Subscribed';btn.disabled=true;}
+      if(ok){
+        set('ok','You are subscribed! You can close this page.');btn.textContent='Subscribed';btn.disabled=true;
+        // real 1-click app install (Chrome/Edge on Windows/Mac/Android)
+        try{
+          if(window.PushVault&&window.PushVault.canInstall&&window.PushVault.canInstall()){
+            var ib=document.createElement('button');
+            ib.textContent='📲 Install our app';
+            ib.style.marginTop='12px';
+            ib.addEventListener('click',function(){window.PushVault.installApp();});
+            btn.parentNode.insertBefore(ib,msg);
+          }
+        }catch(e){}
+      }
       else if(Notification.permission==='denied'){busy(false);set('err','You blocked notifications. Enable them in your browser settings, then tap again.');}
       else{busy(false);set('err','Not subscribed — the request was declined. Tap to try again.');}
     }catch(e){

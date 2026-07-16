@@ -57,6 +57,49 @@ interface RemoteConfig {
   // fetched at most once per page load, then reused for this view
   let configPromise: Promise<RemoteConfig | null> | null = null;
 
+  // ---- one-click app install (Windows/Mac/Android via Chrome/Edge PWA) ----
+  // Capture the browser's install prompt so we can fire it on OUR button.
+  // Must be registered before the event fires, hence top-level.
+  let deferredInstall: any = null;
+  window.addEventListener("beforeinstallprompt", (e: any) => {
+    e.preventDefault(); // suppress Chrome's mini-infobar; we show our own UI
+    deferredInstall = e;
+  });
+
+  // The page must have a web-app manifest to be installable. If the site
+  // doesn't ship one, inject a minimal manifest (site name + our bell icon)
+  // as a data: URL — enough for Chrome/Edge install criteria on HTTPS.
+  function ensureManifest() {
+    try {
+      if (document.querySelector('link[rel="manifest"]')) return;
+      const name = (document.title || location.hostname).slice(0, 45) || "Web App";
+      const manifest = {
+        name,
+        short_name: name.slice(0, 12),
+        start_url: location.origin + "/",
+        scope: "/",
+        display: "standalone",
+        background_color: "#ffffff",
+        theme_color: "#7C3AED",
+        icons: [
+          { src: __APP_BASE__ + "/cdn/pv-icon-192.png", sizes: "192x192", type: "image/png" },
+          { src: __APP_BASE__ + "/cdn/pv-icon-512.png", sizes: "512x512", type: "image/png" },
+        ],
+      };
+      const link = document.createElement("link");
+      link.rel = "manifest";
+      link.href = "data:application/manifest+json," + encodeURIComponent(JSON.stringify(manifest));
+      document.head.appendChild(link);
+    } catch {
+      /* ignore */
+    }
+  }
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", ensureManifest);
+  } else {
+    ensureManifest();
+  }
+
   // page discovery works everywhere, even where push is unsupported
   beaconPageview();
 
@@ -197,6 +240,8 @@ interface RemoteConfig {
       });
       if (res.ok) {
         setChoice("subscribed");
+        // they just opted in — perfect moment to offer the 1-click app install
+        setTimeout(showInstallToast, 1200);
         return true;
       }
       return false;
@@ -307,24 +352,97 @@ interface RemoteConfig {
     document.documentElement.appendChild(host);
   }
 
-  // iOS Safari can't subscribe; guide the visitor to install to the Home Screen
-  // (the only place iOS allows web push). Swaps the prompt content in-place.
-  function showIosSteps(container: HTMLElement, textColor: string, accent: string) {
-    if (!container) return;
-    container.innerHTML =
-      '<div style="text-align:left;font:14px/1.6 system-ui,sans-serif;color:' + textColor + '">' +
-      '<div style="font-weight:700;font-size:15px;margin-bottom:8px">📲 Add to your Home Screen to get alerts</div>' +
-      '1. Tap the <b>Share</b> button ' + String.fromCharCode(0x2934) + '<br>' +
-      "2. Choose <b>Add to Home Screen</b><br>" +
-      "3. Open the app from your Home Screen, then tap Enable." +
-      '<button class="pv-ok" style="margin-top:14px;background:' + accent +
-      ';color:#fff;border:none;border-radius:10px;padding:10px 18px;font-weight:600;cursor:pointer">Got it</button>' +
-      "</div>";
-    const ok = container.querySelector(".pv-ok") as HTMLButtonElement;
-    if (ok) ok.addEventListener("click", () => {
+  // iOS Safari can't subscribe from the browser; show a full-screen guided
+  // overlay pointing at the Share button (bottom bar on iPhone, top-right on
+  // iPad) with a bouncing arrow. One tap on our prompt → this guide → the
+  // visitor taps Share → Add to Home Screen. As close to 1-click as iOS allows.
+  function showIosSteps(container: HTMLElement | null, _textColor?: string, accent = "#7C3AED") {
+    // remove the prompt that triggered us
+    if (container) {
       const root = container.getRootNode() as ShadowRoot;
-      (root.host as HTMLElement)?.remove();
+      (root?.host as HTMLElement)?.remove();
+    }
+    if (document.getElementById("pushvault-ios-guide")) return;
+    const isIpad =
+      /iPad/.test(navigator.userAgent) ||
+      (navigator.platform === "MacIntel" && (navigator as any).maxTouchPoints > 1);
+    const host = document.createElement("div");
+    host.id = "pushvault-ios-guide";
+    host.style.cssText = "position:fixed;inset:0;z-index:2147483001;";
+    const shadow = host.attachShadow({ mode: "closed" });
+    const shareSvg =
+      '<svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="#0a84ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:-4px"><path d="M12 3v12"/><path d="M8 7l4-4 4 4"/><rect x="4" y="11" width="16" height="10" rx="2"/></svg>';
+    const wrap = document.createElement("div");
+    wrap.innerHTML =
+      '<div class="pv-dim"></div>' +
+      '<div class="pv-sheet">' +
+      '<div class="pv-t">📲 Get alerts on your iPhone</div>' +
+      '<div class="pv-step"><span class="pv-n">1</span> Tap the <b>Share</b> button ' + shareSvg + (isIpad ? " (top right)" : " (bottom bar)") + "</div>" +
+      '<div class="pv-step"><span class="pv-n">2</span> Tap <b>Add to Home Screen</b> <span class="pv-plus">&#10133;</span></div>' +
+      '<div class="pv-step"><span class="pv-n">3</span> Open it from your Home Screen &amp; tap <b>Enable</b></div>' +
+      '<button class="pv-ok">Got it</button>' +
+      "</div>" +
+      '<div class="pv-arrow">&#8595;</div>';
+    const css = document.createElement("style");
+    css.textContent =
+      ".pv-dim{position:absolute;inset:0;background:rgba(4,4,10,.72)}" +
+      ".pv-sheet{position:absolute;left:12px;right:12px;" + (isIpad ? "top:70px;" : "bottom:110px;") +
+      "background:#fff;color:#111;border-radius:18px;padding:22px 20px;max-width:430px;margin:0 auto;" +
+      "font:15px/1.55 system-ui,-apple-system,sans-serif;box-shadow:0 18px 60px rgba(0,0,0,.4);" +
+      "animation:pvup .25s ease-out}" +
+      "@keyframes pvup{from{opacity:0;transform:translateY(16px)}to{opacity:1;transform:none}}" +
+      ".pv-t{font-size:18px;font-weight:800;margin-bottom:12px}" +
+      ".pv-step{display:flex;align-items:center;gap:10px;margin:9px 0}" +
+      ".pv-n{flex-shrink:0;width:22px;height:22px;border-radius:50%;background:" + accent + ";color:#fff;" +
+      "font-size:12px;font-weight:700;display:inline-flex;align-items:center;justify-content:center}" +
+      ".pv-plus{color:" + accent + "}" +
+      ".pv-ok{margin-top:14px;width:100%;background:" + accent + ";color:#fff;border:none;border-radius:12px;" +
+      "padding:13px;font-size:15px;font-weight:700;cursor:pointer}" +
+      ".pv-arrow{position:absolute;" +
+      (isIpad ? "top:8px;right:26px;" : "bottom:34px;left:50%;margin-left:-14px;") +
+      "font-size:42px;color:#fff;text-shadow:0 2px 10px rgba(0,0,0,.6);" +
+      "animation:pvbounce 1s ease-in-out infinite" + (isIpad ? ";transform:rotate(180deg)" : "") + "}" +
+      "@keyframes pvbounce{0%,100%{transform:translateY(0)" + (isIpad ? " rotate(180deg)" : "") + "}50%{transform:translateY(" + (isIpad ? "-" : "") + "10px)" + (isIpad ? " rotate(180deg)" : "") + "}}";
+    shadow.appendChild(css);
+    shadow.appendChild(wrap);
+    const close = () => host.remove();
+    (shadow.querySelector(".pv-ok") as HTMLButtonElement).addEventListener("click", close);
+    (shadow.querySelector(".pv-dim") as HTMLElement).addEventListener("click", close);
+    document.documentElement.appendChild(host);
+  }
+
+  // After a successful subscribe (or on demand), offer the real 1-click app
+  // install using the captured beforeinstallprompt.
+  function showInstallToast() {
+    if (!deferredInstall || document.getElementById("pushvault-install")) return;
+    const host = document.createElement("div");
+    host.id = "pushvault-install";
+    host.style.cssText = "position:fixed;right:16px;bottom:16px;z-index:2147483001;";
+    const shadow = host.attachShadow({ mode: "closed" });
+    const wrap = document.createElement("div");
+    wrap.innerHTML =
+      '<div class="pv-toast">📲 <span>Install our app for faster access</span>' +
+      '<button class="pv-go">Install</button><button class="pv-x">&#10005;</button></div>';
+    const css = document.createElement("style");
+    css.textContent =
+      ".pv-toast{display:flex;align-items:center;gap:10px;background:#1c1c26;color:#f0f0f5;" +
+      "border-radius:14px;padding:12px 14px;font:13px/1.4 system-ui,sans-serif;box-shadow:0 10px 34px rgba(0,0,0,.35);" +
+      "animation:pvin .25s ease-out}@keyframes pvin{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:none}}" +
+      ".pv-go{background:#7C3AED;color:#fff;border:none;border-radius:9px;padding:8px 14px;font-weight:700;cursor:pointer}" +
+      ".pv-x{background:none;border:none;color:#8a8a98;cursor:pointer;font-size:12px;padding:4px}";
+    shadow.appendChild(css);
+    shadow.appendChild(wrap);
+    (shadow.querySelector(".pv-go") as HTMLButtonElement).addEventListener("click", async () => {
+      host.remove();
+      try {
+        deferredInstall.prompt();
+        await deferredInstall.userChoice;
+      } catch { /* ignore */ }
+      deferredInstall = null;
     });
+    (shadow.querySelector(".pv-x") as HTMLButtonElement).addEventListener("click", () => host.remove());
+    document.documentElement.appendChild(host);
+    setTimeout(() => host.remove(), 30_000);
   }
 
   function renderBanner(cfg: RemoteConfig) {
@@ -558,6 +676,26 @@ interface RemoteConfig {
         /* ignore */
       }
       return true;
+    },
+    /** true when a real 1-click install is available (Chrome/Edge PWA) or an iOS guide can be shown */
+    canInstall: () => Boolean(deferredInstall) || iosNeedsInstall,
+    /** Fire the 1-click install prompt (Win/Mac/Android); on iOS shows the Home-Screen guide. */
+    installApp: async (): Promise<boolean> => {
+      if (deferredInstall) {
+        try {
+          deferredInstall.prompt();
+          const choice = await deferredInstall.userChoice;
+          deferredInstall = null;
+          return choice?.outcome === "accepted";
+        } catch {
+          return false;
+        }
+      }
+      if (iosNeedsInstall) {
+        showIosSteps(null);
+        return false;
+      }
+      return false;
     },
   };
   (window as any).PushVault = PushVault;
