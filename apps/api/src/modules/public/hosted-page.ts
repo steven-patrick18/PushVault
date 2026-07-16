@@ -11,15 +11,50 @@ function esc(s: string): string {
   );
 }
 
+/**
+ * Only allow safe CSS color tokens (hex / rgb(a) / plain names) into the
+ * inline stylesheet — the values come from tenant config, so anything else
+ * could break out of the CSS context. Falls back on anything unexpected.
+ */
+function cssColor(v: unknown, fallback: string): string {
+  const s = String(v ?? "").trim();
+  if (/^#[0-9a-f]{3,8}$/i.test(s)) return s;
+  if (/^rgba?\(\s*[\d.,\s%]+\)$/i.test(s)) return s;
+  if (/^[a-z]{3,20}$/i.test(s)) return s.toLowerCase();
+  return fallback;
+}
+
+function clampNum(v: unknown, lo: number, hi: number, fallback: number): number {
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : fallback;
+}
+
 export function renderOptInPage(property: any, cdnBase: string): string {
   const cfg = (property.promptConfig as any) ?? {};
   const text = cfg.text ?? {};
   const style = cfg.style ?? {};
-  const accent = esc(style.accent || "#7C3AED");
+  const accent = cssColor(style.accent, "#7C3AED");
   const headline = esc(text.headline || "Get instant alerts & offers");
   const yes = esc(text.yes || "Enable notifications");
+  const noLabel = typeof text.no === "string" && text.no.trim() ? esc(text.no.trim()) : null;
   const brand = esc(property.name || "Notifications");
   const logo = style.logo ? esc(style.logo) : null;
+
+  // theme + design fields from the Prompt designer (the ones that make sense
+  // for a full-screen popup card; position/trigger don't apply here)
+  const light = style.theme === "light";
+  const pageBg = light
+    ? "radial-gradient(ellipse at top,#f4f1fb 0%,#e9e9f0 55%)"
+    : "radial-gradient(ellipse at top,#1a1030 0%,#0e0e13 55%)";
+  const cardBg = cssColor(style.bg, light ? "#ffffff" : "#16161e");
+  const cardBorder = light ? "#e2e2ea" : "#2a2a38";
+  const textColor = cssColor(style.text_color, light ? "#1a1a2e" : "#e8e8f0");
+  const subColor = light ? "#6b6b7b" : "#9a9aad";
+  const stepsBg = light ? "#f6f5fb" : "#0f0f16";
+  const radius = clampNum(style.radius, 0, 40, 20);
+  const btnRadius = Math.min(radius, 16);
+  const scale = clampNum(style.scale, 0.7, 1.5, 1);
+  const maxW = Math.round(440 * scale);
 
   return `<!doctype html><html lang="en"><head>
 <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
@@ -27,21 +62,22 @@ export function renderOptInPage(property: any, cdnBase: string): string {
 <style>
 :root{--accent:${accent}}
 *{box-sizing:border-box;margin:0}
-body{font-family:system-ui,-apple-system,sans-serif;background:radial-gradient(ellipse at top,#1a1030 0%,#0e0e13 55%);color:#e8e8f0;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
-.card{max-width:440px;width:100%;text-align:center;background:#16161e;border:1px solid #2a2a38;border-radius:20px;padding:40px 32px}
+body{font-family:system-ui,-apple-system,sans-serif;background:${pageBg};color:${textColor};min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+.card{max-width:${maxW}px;width:100%;text-align:center;background:${cardBg};border:1px solid ${cardBorder};border-radius:${radius}px;padding:40px 32px}
 .logo{width:64px;height:64px;border-radius:16px;object-fit:cover;margin:0 auto 18px;display:block}
 .bell{font-size:56px;margin-bottom:14px}
-h1{font-size:24px;line-height:1.25;margin-bottom:10px}
-p{color:#9a9aad;font-size:14px;margin-bottom:26px}
-button{background:var(--accent);color:#fff;border:none;border-radius:12px;padding:16px 28px;font-size:16px;font-weight:700;cursor:pointer;width:100%;transition:opacity .15s;display:flex;align-items:center;justify-content:center;gap:10px}
+h1{font-size:24px;line-height:1.25;margin-bottom:10px;color:${textColor}}
+p{color:${subColor};font-size:14px;margin-bottom:26px}
+button{background:var(--accent);color:#fff;border:none;border-radius:${btnRadius}px;padding:16px 28px;font-size:16px;font-weight:700;cursor:pointer;width:100%;transition:opacity .15s;display:flex;align-items:center;justify-content:center;gap:10px}
 button:disabled{opacity:.6;cursor:default}
+button.no{background:transparent;color:${subColor};border:1px solid ${cardBorder};margin-top:10px;font-weight:600}
 .msg{margin-top:18px;font-size:14px;min-height:20px;line-height:1.5}
 .ok{color:#34d399}.err{color:#f87171}.warn{color:#fbbf24}
-.foot{margin-top:26px;font-size:11px;color:#5a5a68}
+.foot{margin-top:26px;font-size:11px;color:${subColor};opacity:.7}
 .spin{width:18px;height:18px;border:2px solid rgba(255,255,255,.4);border-top-color:#fff;border-radius:50%;animation:sp .7s linear infinite;display:inline-block}
 @keyframes sp{to{transform:rotate(360deg)}}
-.steps{text-align:left;background:#0f0f16;border:1px solid #2a2a38;border-radius:12px;padding:16px 18px;margin-top:16px;font-size:13px;line-height:1.7;color:#c7c7d4}
-.steps b{color:#fff}
+.steps{text-align:left;background:${stepsBg};border:1px solid ${cardBorder};border-radius:12px;padding:16px 18px;margin-top:16px;font-size:13px;line-height:1.7;color:${subColor}}
+.steps b{color:${textColor}}
 </style></head>
 <body>
 <div class="card">
@@ -49,6 +85,7 @@ button:disabled{opacity:.6;cursor:default}
   <h1>${headline}</h1>
   <p>Tap the button below and allow notifications to start receiving updates from ${brand}.</p>
   <button id="sub">${yes}</button>
+  ${noLabel ? `<button id="no" class="no">${noLabel}</button>` : ``}
   <div class="msg" id="msg"></div>
   <div class="foot">Powered by PushVault · You can turn these off anytime in your browser.</div>
 </div>
@@ -63,6 +100,12 @@ button:disabled{opacity:.6;cursor:default}
     if(on){btn.disabled=true;btn.innerHTML='<span class="spin"></span> Working…';}
     else{btn.disabled=false;btn.textContent=label;}
   }
+  var no=document.getElementById('no');
+  if(no){no.addEventListener('click',function(){
+    // opened as a popup window → close it; otherwise just dismiss the card
+    try{window.close();}catch(e){}
+    set('','No problem — you can enable alerts anytime.');no.style.display='none';
+  });}
   var ua=navigator.userAgent||'';
   var isIOS=/iPad|iPhone|iPod/.test(ua)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
   var standalone=window.navigator.standalone===true||window.matchMedia('(display-mode: standalone)').matches;
