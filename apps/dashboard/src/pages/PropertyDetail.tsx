@@ -26,6 +26,7 @@ interface PromptConfig {
     cooldown_days?: number; // legacy
     cooldown_value?: number;
     cooldown_unit?: "seconds" | "minutes" | "hours" | "days";
+    same_page?: boolean;
   };
 }
 
@@ -648,6 +649,23 @@ export default function PropertyDetail() {
                 </>
               )}
             </div>
+            {cfg.reask.enabled && (
+              <div style={{ marginTop: 8 }}>
+                <select
+                  style={{ width: "100%", maxWidth: 420 }}
+                  value={cfg.reask.same_page ? "same" : "next"}
+                  onChange={(e) => setCfg({ ...cfg, reask: { ...cfg.reask, same_page: e.target.value === "same" } })}
+                >
+                  <option value="next">Re-ask on the visitor's NEXT visit (recommended)</option>
+                  <option value="same">Re-ask again on the SAME page after the cooldown</option>
+                </select>
+                <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 6 }}>
+                  {cfg.reask.same_page
+                    ? "The prompt pops up again on the same page once the cooldown passes — no reload needed. Best with a short cooldown (seconds/minutes); long cooldowns fall back to next-visit."
+                    : "After 'No', the prompt reappears only when the visitor loads the page again (after the cooldown). Less pushy."}
+                </div>
+              </div>
+            )}
 
             <button className="btn" style={{ marginTop: 20 }} onClick={() => saveConfig()} disabled={saving}>
               {saving ? "Saving…" : "Save prompt settings"}

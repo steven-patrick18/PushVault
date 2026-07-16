@@ -33,6 +33,8 @@ interface PromptConfig {
     cooldown_days?: number; // legacy
     cooldown_value?: number;
     cooldown_unit?: "seconds" | "minutes" | "hours" | "days";
+    /** re-show on the SAME page after the cooldown, not only on the next visit */
+    same_page?: boolean;
   };
 }
 
@@ -203,6 +205,28 @@ interface RemoteConfig {
     }
   }
 
+  const UNIT_MS: Record<string, number> = { seconds: 1000, minutes: 60_000, hours: 3600_000, days: 86400_000 };
+  function reaskCooldownMs(reask: any): number {
+    return reask?.cooldown_value != null
+      ? reask.cooldown_value * (UNIT_MS[reask.cooldown_unit ?? "days"] ?? 86400_000)
+      : (reask?.cooldown_days ?? 7) * 86400_000;
+  }
+
+  // After a "No", if same-page re-ask is enabled, re-show the prompt on THIS
+  // page once the cooldown passes (no reload needed). Only for short cooldowns —
+  // a days-long same-page timer is pointless and would overflow setTimeout, so
+  // those fall back to the next-visit re-ask handled in init().
+  function scheduleSamePageReask(cfg: RemoteConfig) {
+    const reask = cfg.prompt_config?.reask;
+    if (!reask?.enabled || !reask.same_page) return;
+    const ms = reaskCooldownMs(reask);
+    if (ms <= 0 || ms > 6 * 3600_000) return; // cap at 6h
+    setTimeout(() => {
+      const c = getChoice();
+      if (!c || c.choice === "no") renderBanner(cfg);
+    }, ms);
+  }
+
   // Centered modal card (style.position === "modal") — a full-screen dimmed
   // overlay with a card in the middle, matching the hosted opt-in page look.
   function renderModal(cfg: RemoteConfig) {
@@ -275,7 +299,7 @@ interface RemoteConfig {
       remove();
       await doSubscribe(cfg.vapid_public_key);
     });
-    const dismiss = () => { setChoice("no"); remove(); };
+    const dismiss = () => { setChoice("no"); remove(); scheduleSamePageReask(cfg); };
     noBtn.addEventListener("click", dismiss);
     (shadow.querySelector(".pv-x") as HTMLButtonElement).addEventListener("click", dismiss);
     host.addEventListener("click", (e) => { if (e.target === host) dismiss(); });
@@ -391,10 +415,12 @@ interface RemoteConfig {
     noBtn.addEventListener("click", () => {
       setChoice("no");
       remove();
+      scheduleSamePageReask(cfg);
     });
     (shadow.querySelector(".pv-x") as HTMLButtonElement).addEventListener("click", () => {
       setChoice("no");
       remove();
+      scheduleSamePageReask(cfg);
     });
 
     document.documentElement.appendChild(host);
@@ -480,12 +506,7 @@ interface RemoteConfig {
       if (!cfg0) return;
       const reask = cfg0.prompt_config?.reask;
       if (!reask?.enabled) return;
-      const UNIT_MS = { seconds: 1000, minutes: 60_000, hours: 3600_000, days: 86400_000 };
-      const cooldownMs =
-        reask.cooldown_value != null
-          ? reask.cooldown_value * (UNIT_MS[reask.cooldown_unit ?? "days"] ?? 86400_000)
-          : (reask.cooldown_days ?? 7) * 86400_000;
-      if (Date.now() - prior.ts < cooldownMs) return;
+      if (Date.now() - prior.ts < reaskCooldownMs(reask)) return;
       if (!pageMatches(cfg0.prompt_config?.pages)) return;
       arm(cfg0);
       return;
