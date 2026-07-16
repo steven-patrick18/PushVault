@@ -56,6 +56,7 @@ services:
       dockerfile: deploy/Dockerfile
       args:
         APP_BASE_URL: https://${PUSH_DOMAIN}
+        GIT_SHA: ${GIT_SHA:-}
     restart: unless-stopped
     logging: *default-logging
     mem_limit: 4g
@@ -91,6 +92,9 @@ services:
     volumes:
       # optional GeoLite2 database (see DEPLOY.md §7)
       - ./geoip:/geoip:ro
+      # control channel for the self-serve "Update now" button: the app drops a
+      # request file here; the host watcher (deploy/host-updater.sh) rebuilds
+      - ./control:/control
     healthcheck:
       test: ["CMD-SHELL", "node -e \"fetch('http://localhost:3000/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))\""]
       interval: 15s

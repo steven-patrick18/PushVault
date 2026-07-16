@@ -19,6 +19,9 @@ COPY . .
 
 ARG APP_BASE_URL=http://localhost:3000
 ENV APP_BASE_URL=$APP_BASE_URL
+# the deployed commit, shown on the Updates page to compare against GitHub
+ARG GIT_SHA=
+ENV PUSHVAULT_COMMIT=$GIT_SHA
 
 RUN cd apps/api && npx prisma generate
 RUN pnpm --filter @pushvault/snippet build \

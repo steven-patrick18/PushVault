@@ -20,6 +20,21 @@ export class UpdatesController {
     return this.updates.getUpdates(check === "1");
   }
 
+  /** Live status of an in-progress update (polled by the Updates page). */
+  @Get("status")
+  status(@CurrentUser() user: AuthUser) {
+    this.assertStaff(user);
+    return this.updates.status();
+  }
+
+  /** One-click "Update now": rebuild + restart to the latest commit. */
+  @Post("apply")
+  apply(@CurrentUser() user: AuthUser) {
+    if (user.role !== "admin") throw new ForbiddenException("Only admins can apply updates");
+    return this.updates.requestUpdate();
+  }
+
+  // kept for the local-dev checkout case
   @Post("pull")
   pull(@CurrentUser() user: AuthUser) {
     if (user.role !== "admin") throw new ForbiddenException("Only admins can pull updates");
