@@ -56,6 +56,10 @@ class UpdatePropertyDto {
   promptConfig?: unknown;
 
   @IsOptional()
+  @IsString()
+  callDomain?: string;
+
+  @IsOptional()
   @IsInt()
   @Min(0)
   frequencyCapPerDay?: number;

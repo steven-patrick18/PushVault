@@ -106,6 +106,7 @@ export class PropertiesService {
       domains: string[];
       iconUrl: string | null;
       promptConfig: unknown;
+      callDomain: string | null;
       frequencyCapPerDay: number;
       frequencyCapPerWeek: number;
       status: string;
@@ -119,6 +120,11 @@ export class PropertiesService {
       if (patch.domains.length === 0) {
         throw new BadRequestException("At least one valid domain is required");
       }
+    }
+    if (data.callDomain !== undefined) {
+      // normalize like a domain (strip scheme/path); empty clears it
+      const d = data.callDomain ? normalizeDomain(data.callDomain) : "";
+      patch.callDomain = d || null;
     }
     const property = await this.db(user).property.update({
       where: { id },

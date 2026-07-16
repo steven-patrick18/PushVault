@@ -121,6 +121,7 @@ model Property {
   verifiedAt          DateTime? @map("verified_at") @db.Timestamptz()
   verification        Json?
   adsCheck            Json?     @map("ads_check") // last Google-norms compliance check {verdict, checks:[...], at}
+  callDomain          String?   @map("call_domain") // branded host for the click-to-call bridge (must point at this server)
   createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt           DateTime? @updatedAt @map("updated_at") @db.Timestamptz()
 

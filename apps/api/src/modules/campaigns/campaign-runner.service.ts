@@ -350,7 +350,13 @@ export class CampaignRunnerService implements OnModuleInit {
         campaign.callStrategy === "random"
           ? nums[Math.floor(Math.random() * nums.length)]
           : nums[index % nums.length];
-      const base = process.env.APP_BASE_URL ?? "http://localhost:3000";
+      // serve the bridge from the property's branded call domain when set
+      // (must point at this server) so the address bar shows their domain, not
+      // ours; otherwise fall back to this server's own domain
+      const callDomain = campaign.property?.callDomain;
+      const base = callDomain
+        ? `https://${callDomain}`
+        : process.env.APP_BASE_URL ?? "http://localhost:3000";
       return `${base}/api/v1/public/call?n=${encodeURIComponent(n)}`;
     }
     return campaign.clickUrl;

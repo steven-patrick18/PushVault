@@ -87,7 +87,12 @@ export class PublicService {
     const bare = host.toLowerCase().split(":")[0].replace(/\.$/, ""); // drop port + trailing dot
     const all = await this.activeProperties();
     return (
-      all.find((p: any) => p.domains.some((d: string) => d === host || d === bare)) ?? null
+      all.find(
+        (p: any) =>
+          p.domains.some((d: string) => d === host || d === bare) ||
+          // the branded click-to-call bridge host also needs a cert issued
+          (p.callDomain && (p.callDomain === host || p.callDomain === bare)),
+      ) ?? null
     );
   }
 

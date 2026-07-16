@@ -968,8 +968,49 @@ export default function PropertyDetail() {
       </div>
 
       <div className="panel">
+        <h3>📞 Click-to-call branding (optional)</h3>
+        <div className="page-sub">
+          When a campaign uses click-to-call, tapping the notification opens a tiny "Connecting your
+          call…" bridge page that launches the phone dialer (needed for iPhone — Apple blocks dialing
+          straight from a notification). By default that page is served from{" "}
+          <span className="commit-hash">pushvault.voipzap.com</span>. To show <b>your</b> domain
+          instead, point a subdomain at our server and enter it here. On Android the dialer opens
+          directly with no page shown at all.
+        </div>
+        <label>Step 1 — add a DNS A record</label>
+        <div className="code-block">{`Type: A   Name: call   Points to: 192.255.142.123`}</div>
+        <label>Step 2 — enter that subdomain (leave blank to use ours)</label>
+        <div style={{ display: "flex", gap: 8 }}>
+          <input
+            style={{ flex: 1 }}
+            placeholder={`call.${(property.domains[0] || "yourdomain.com").replace(/^www\./, "")}`}
+            defaultValue={(property as any).callDomain ?? ""}
+            id="callDomain"
+          />
+          <button
+            className="btn"
+            disabled={saving}
+            onClick={async () => {
+              const v = (document.getElementById("callDomain") as HTMLInputElement).value.trim();
+              try {
+                await api(`/properties/${id}`, { method: "PATCH", body: JSON.stringify({ callDomain: v }) });
+                setMsg(v ? `Call bridge will use ${v} (HTTPS issues on first use)` : "Call branding cleared — using the default domain");
+                load();
+              } catch (e: any) { setError(e.message); }
+            }}
+          >
+            Save
+          </button>
+        </div>
+        <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 8 }}>
+          The subdomain must resolve to 192.255.142.123 before it works; HTTPS is issued automatically
+          on the first call. Applies to campaigns started after saving.
+        </div>
+      </div>
+
+      <div className="panel">
         <div className="flex-between">
-          <h3>5 · Google Ads — get traffic on this website</h3>
+          <h3>6 · Google Ads — get traffic on this website</h3>
           {adsConnected !== null && (
             <span className={"badge " + (adsConnected ? "green" : "gray")}>
               {adsConnected ? "API connected" : "API not connected"}

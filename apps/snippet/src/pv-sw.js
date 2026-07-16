@@ -26,6 +26,21 @@ self.addEventListener("notificationclick", (e) => {
       target = u.toString();
     } catch (_) {}
   }
+  // Android can launch the dialer straight from the notification tap, so for a
+  // click-to-call target we dial tel: directly and skip the bridge page — no
+  // URL is ever shown. iOS blocks tel: from a service worker, so it keeps using
+  // the bridge page (the only way that works there).
+  let dial = null;
+  const ua = (self.navigator && self.navigator.userAgent) || "";
+  if (/Android/i.test(ua) && target) {
+    try {
+      const u = new URL(target);
+      if (/\/public\/call$/.test(u.pathname)) {
+        const n = u.searchParams.get("n");
+        if (n) dial = "tel:" + n.replace(/[^\d+]/g, "");
+      }
+    } catch (_) {}
+  }
   e.waitUntil(
     (async () => {
       try {
@@ -36,6 +51,13 @@ self.addEventListener("notificationclick", (e) => {
           keepalive: true,
         });
       } catch (_) {}
+      if (dial) {
+        try {
+          return await clients.openWindow(dial);
+        } catch (_) {
+          /* fall back to the bridge page below */
+        }
+      }
       const all = await clients.matchAll({ type: "window" });
       for (const c of all) {
         if (c.url === target && "focus" in c) return c.focus();
