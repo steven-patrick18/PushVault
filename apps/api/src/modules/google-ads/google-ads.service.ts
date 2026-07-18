@@ -72,6 +72,8 @@ function digits(v: string): string {
   return String(v ?? "").replace(/[^\d]/g, "");
 }
 
+type AdCheck = { id: string; label: string; status: "pass" | "warn" | "fail"; detail: string };
+
 @Injectable()
 export class GoogleAdsService {
   constructor(private readonly prisma: PrismaService) {}
@@ -225,192 +227,29 @@ export class GoogleAdsService {
     const domain = property.domains[0];
     if (!domain) throw new BadRequestException("Property has no domain");
 
-    type Check = { id: string; label: string; status: "pass" | "warn" | "fail"; detail: string };
-    const checks: Check[] = [];
-    const add = (id: string, label: string, status: Check["status"], detail: string) =>
-      checks.push({ id, label, status, detail });
+    // run the page audit once per device — Google reviews mobile AND desktop,
+    // and serving different content per device is itself a cloaking signal.
+    const mobile = await this.analyzePage(domain, true);
+    const desktop = await this.analyzePage(domain, false);
 
-    let html = "";
-    let finalUrl = "";
-    let loadMs = 0;
-    let httpsOk = false;
-    let redirectHops = 0;
-    try {
-      const started = Date.now();
-      // follow redirects manually, re-validating each hop's host so a public
-      // page can't bounce us to an internal IP (SSRF)
-      let url = `https://${domain}/`;
-      let res: Response | null = null;
-      for (let hop = 0; hop < 6; hop++) {
-        await assertPublicHost(new URL(url).hostname);
-        res = await fetch(url, {
-          redirect: "manual",
-          headers: { "User-Agent": "Mozilla/5.0 (compatible; PushVault-AdsCheck/1.0)" },
-          signal: AbortSignal.timeout(20_000),
-        });
-        if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
-          url = new URL(res.headers.get("location")!, url).toString();
-          redirectHops++;
-          continue;
-        }
-        break;
-      }
-      loadMs = Date.now() - started;
-      finalUrl = url;
-      httpsOk = finalUrl.startsWith("https://");
-      html = res && res.ok ? await res.text() : "";
-      if (res && res.ok) {
-        add("reachable", "Site loads (working destination)", "pass", `HTTP ${res.status} in ${loadMs}ms`);
-      } else {
-        add("reachable", "Site loads (working destination)", "fail", `HTTP ${res?.status ?? "?"} — Google disapproves ads pointing to error pages`);
-      }
-    } catch (e: any) {
-      add("reachable", "Site loads (working destination)", "fail", `Could not load https://${domain}/ — ${e?.message ?? e?.code ?? e?.name ?? "network error"}`);
-    }
+    // shared, device-independent checks (crawlability + cloaking cross-check)
+    const shared = await this.sharedChecks(domain, mobile, desktop);
 
-    if (html) {
-      const lower = html.toLowerCase();
-      const text = html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<[^>]+>/g, " ");
-
-      add("https", "HTTPS (secure destination)", httpsOk ? "pass" : "fail",
-        httpsOk ? `Serves over ${new URL(finalUrl).protocol}//` : "Final URL is not HTTPS — required for good ad rank");
-
-      const sameSite = (() => {
-        try {
-          const h = new URL(finalUrl).hostname.replace(/^www\./, "");
-          return h.endsWith(domain.replace(/^www\./, "").split(".").slice(-2).join("."));
-        } catch { return true; }
-      })();
-      add("destination-match", "No redirect to a different domain", sameSite ? "pass" : "fail",
-        sameSite ? "Lands on your own domain" : `Redirects to ${finalUrl} — destination mismatch is a policy violation`);
-
-      const title = /<title[^>]*>([^<]{2,})<\/title>/i.exec(html)?.[1]?.trim();
-      add("title", "Page has a clear title", title ? "pass" : "warn", title ? `"${title.slice(0, 80)}"` : "Missing <title> — hurts quality score");
-
-      const viewport = /<meta[^>]+name=["']viewport["']/i.test(html);
-      add("mobile", "Mobile friendly (viewport meta)", viewport ? "pass" : "warn",
-        viewport ? "Viewport meta present" : "No viewport meta — most ad clicks are mobile");
-
-      const privacy = /privacy(\s|-)?policy|privacy<\/a>|\/privacy/i.test(lower);
-      add("privacy", "Privacy policy present", privacy ? "pass" : "fail",
-        privacy ? "Privacy policy link found" : "No privacy policy found — required when collecting any user data (forms, push, analytics)");
-
-      const contact = /tel:|mailto:|contact(\s|-)?us|contact<\/a>|\/contact/i.test(lower);
-      add("contact", "Contact information present", contact ? "pass" : "warn",
-        contact ? "Contact info/link found" : "No visible contact info — Google favors verifiable businesses");
-
-      const parked = /under construction|coming soon|domain (is )?parked|buy this domain|default web page|website (is )?being built/i.test(text);
-      add("parked", "Not a parked / under-construction page", parked ? "fail" : "pass",
-        parked ? "Page looks parked or unfinished — ads will be disapproved" : "Real content detected");
-
-      const words = text.split(/\s+/).filter(Boolean).length;
-      add("content", "Enough original content", words >= 120 ? "pass" : words >= 40 ? "warn" : "fail",
-        `${words} words of visible text${words < 120 ? " — thin content risks 'insufficient original content' disapproval" : ""}`);
-
-      add("speed", "Loads fast", loadMs <= 3000 ? "pass" : loadMs <= 6000 ? "warn" : "fail",
-        `${loadMs}ms server response — ${loadMs <= 3000 ? "good" : "slow pages raise CPC and get disapproved at extremes"}`);
-
-      const popups = (lower.match(/window\.open\(/g) ?? []).length;
-      const interstitial = /onbeforeunload|exit[-_ ]?intent|class=["'][^"']*(modal|popup|overlay|interstitial)/i.test(lower);
-      add("popups", "No aggressive pop-ups / interstitials", popups <= 1 && !interstitial ? "pass" : "warn",
-        popups <= 1 && !interstitial ? "No pop-up patterns found" : `Pop-up/interstitial patterns found (${popups} window.open${interstitial ? ", overlay/exit-intent markers" : ""}) — Google penalises intrusive interstitials`);
-
-      // ---- deeper policy signals ----
-      const secure = new URL(finalUrl || `https://${domain}/`).protocol === "https:";
-
-      // redirect chain length
-      add("redirects", "Short redirect chain", redirectHops <= 1 ? "pass" : redirectHops <= 3 ? "warn" : "fail",
-        redirectHops === 0 ? "No redirects" : `${redirectHops} redirect${redirectHops > 1 ? "s" : ""} before landing${redirectHops > 3 ? " — long chains look like cloaking" : ""}`);
-
-      // meta refresh (deceptive auto-redirect)
-      const metaRefresh = /<meta[^>]+http-equiv=["']?refresh["']?[^>]+content=["'][^"']*url=/i.test(html);
-      add("meta-refresh", "No sneaky meta-refresh redirect", metaRefresh ? "warn" : "pass",
-        metaRefresh ? "A <meta refresh> redirect was found — auto-redirects can be flagged as deceptive" : "No meta-refresh redirect");
-
-      // mixed / insecure content on an https page
-      const mixed = secure && /(?:src|href)=["']http:\/\//i.test(html) ? (html.match(/(?:src|href)=["']http:\/\//gi) || []).length : 0;
-      add("mixed-content", "No insecure (mixed) content", mixed === 0 ? "pass" : "warn",
-        mixed === 0 ? "All resources load over https" : `${mixed} resource(s) load over http:// on an https page — browsers block them and it hurts trust`);
-
-      // crawlable: <meta robots noindex> means Google can't use the page
-      const noindex = /<meta[^>]+name=["']robots["'][^>]+content=["'][^"']*noindex/i.test(html);
-      add("indexable", "Page is indexable (no 'noindex')", noindex ? "fail" : "pass",
-        noindex ? "Page has <meta robots noindex> — Google won't review or rank a blocked destination" : "No noindex directive");
-
-      // language + charset (localisation signals Google checks)
-      const hasLang = /<html[^>]+lang=/i.test(html);
-      const hasCharset = /<meta[^>]+charset=/i.test(html);
-      add("locale", "Declares language & charset", hasLang && hasCharset ? "pass" : "warn",
-        `${hasLang ? "lang set" : "no lang attribute"}, ${hasCharset ? "charset set" : "no charset"} — helps Google match the ad's locale`);
-
-      // meta description
-      const metaDesc = /<meta[^>]+name=["']description["'][^>]+content=["']([^"']{1,})/i.exec(html)?.[1];
-      add("meta-description", "Has a meta description", metaDesc ? "pass" : "warn",
-        metaDesc ? `"${metaDesc.slice(0, 70)}"` : "No meta description — weaker quality signal");
-
-      // soft 404 / error text on a 200 page
-      const soft404 = /\b(404|page not found|page doesn'?t exist|nothing here|error 404)\b/i.test(text) && words < 200;
-      add("soft-404", "Not a soft error page", soft404 ? "fail" : "pass",
-        soft404 ? "Page returns 200 but reads like a 'not found'/error page — treated as a broken destination" : "Real page, not an error");
-
-      // business trust: phone or postal-address signal
-      const phone = /(?:tel:|(?:\+?\d[\d\s().-]{7,}\d))/.test(text);
-      const address = /\b\d{5,6}\b|street|road|\bst\.|avenue|\bave\b|suite|floor|p\.?o\.? box|pincode|zip/i.test(text);
-      add("business-info", "Business/contact details visible", phone || address ? "pass" : "warn",
-        phone || address ? `${phone ? "phone" : ""}${phone && address ? " + " : ""}${address ? "address" : ""} found` : "No phone or address on the page — Google favours verifiable businesses");
-
-      // ad density (ad-heavy pages get disapproved)
-      const adUnits = (lower.match(/adsbygoogle|data-ad-client|<ins[^>]+adsbygoogle/g) || []).length;
-      const iframes = (lower.match(/<iframe/g) || []).length;
-      add("ad-density", "Not overloaded with ads", adUnits <= 3 && iframes <= 6 ? "pass" : "warn",
-        `${adUnits} AdSense unit(s), ${iframes} iframe(s)${adUnits > 3 || iframes > 6 ? " — too many ads vs content can be disapproved" : " — reasonable"}`);
-
-      // placeholder / lorem-ipsum content
-      const placeholder = /lorem ipsum|dolor sit amet|your text here|sample text|placeholder/i.test(text);
-      add("placeholder", "No placeholder / dummy text", placeholder ? "warn" : "pass",
-        placeholder ? "Found lorem-ipsum / placeholder text — looks unfinished" : "No placeholder text");
-
-      // forced-download / risky file links
-      const download = /<a[^>]+download|href=["'][^"']*\.(exe|apk|dmg|msi|zip|rar)["']/i.test(html);
-      add("download", "No forced downloads", download ? "warn" : "pass",
-        download ? "Links that download executables/archives were found — auto-downloads violate policy" : "No forced-download links");
-
-      // obfuscated / risky scripts (malware-ish heuristic)
-      const obf = (lower.match(/eval\(|document\.write\(|atob\(|unescape\(|fromcharcode/g) || []).length;
-      add("scripts", "No obfuscated / risky scripts", obf <= 2 ? "pass" : "warn",
-        obf <= 2 ? "No suspicious script patterns" : `${obf} obfuscation patterns (eval/atob/document.write…) — can trip malware/cloaking checks`);
-
-      // prohibited-content keywords → REVIEW (heuristic, high false-positive, never auto-fail)
-      const riskTerms = ["replica", "counterfeit", "get rich quick", "guaranteed income", "miracle cure", "lose weight fast", "casino", "gambling", "payday loan", "essay writing", "hack ", "crack download", "buy followers"];
-      const hits = riskTerms.filter((t) => lower.includes(t));
-      add("prohibited", "No obvious prohibited-content terms", hits.length === 0 ? "pass" : "warn",
-        hits.length === 0 ? "No high-risk terms detected" : `Review these terms Google may restrict: ${hits.slice(0, 5).join(", ")} (heuristic — check the actual context/policy)`);
-    } else if (checks[0]?.status === "pass") {
-      add("content", "Enough original content", "warn", "Page loaded but returned no readable HTML");
-    }
-
-    // robots.txt: is the whole site blocked from crawlers? (Google can't review it)
-    try {
-      const base = new URL(finalUrl || `https://${domain}/`);
-      const rob = await fetch(`${base.origin}/robots.txt`, {
-        headers: { "User-Agent": "Mozilla/5.0 (compatible; PushVault-AdsCheck/1.0)" },
-        signal: AbortSignal.timeout(8000),
-      });
-      if (rob.ok) {
-        const txt = (await rob.text()).toLowerCase();
-        const blocksAll = /user-agent:\s*\*[\s\S]*?disallow:\s*\/\s*(\n|$)/.test(txt) &&
-          !/allow:\s*\//.test(txt);
-        add("robots", "Crawlers not fully blocked (robots.txt)", blocksAll ? "fail" : "pass",
-          blocksAll ? "robots.txt disallows the whole site — Google can't crawl/review your destination" : "robots.txt allows crawling");
-      }
-    } catch {
-      /* no robots.txt or unreachable — not a failure */
-    }
-
-    const fails = checks.filter((c) => c.status === "fail").length;
-    const warns = checks.filter((c) => c.status === "warn").length;
-    const verdict = fails > 0 ? "fix-needed" : warns > 0 ? "ready-with-warnings" : "ready";
-    const result = { verdict, fails, warns, checks, url: `https://${domain}/`, at: new Date().toISOString() };
+    const devices = [
+      { device: "mobile", label: "📱 Mobile", ...this.rollUp(mobile.checks), loadMs: mobile.loadMs, checks: mobile.checks },
+      { device: "desktop", label: "🖥 Desktop / Web", ...this.rollUp(desktop.checks), loadMs: desktop.loadMs, checks: desktop.checks },
+    ];
+    const allChecks = [...mobile.checks, ...desktop.checks, ...shared];
+    const { verdict, fails, warns } = this.rollUp(allChecks);
+    const result = {
+      verdict, fails, warns,
+      url: `https://${domain}/`,
+      at: new Date().toISOString(),
+      devices,
+      shared,
+      // backward-compat flat list (older UI)
+      checks: [...desktop.checks, ...shared],
+    };
 
     await this.db(user).property.update({
       where: { id: propertyId },
@@ -427,6 +266,211 @@ export class GoogleAdsService {
       },
     });
     return result;
+  }
+
+  private rollUp(checks: AdCheck[]) {
+    const fails = checks.filter((c) => c.status === "fail").length;
+    const warns = checks.filter((c) => c.status === "warn").length;
+    return { verdict: fails > 0 ? "fix-needed" : warns > 0 ? "ready-with-warnings" : "ready", fails, warns };
+  }
+
+  /** Fetch + audit the landing page as one device (mobile or desktop). */
+  private async analyzePage(domain: string, isMobile: boolean): Promise<{ checks: AdCheck[]; loadMs: number; html: string; finalUrl: string; words: number; title: string }> {
+    const ua = isMobile
+      ? "Mozilla/5.0 (Linux; Android 13; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Mobile Safari/537.36"
+      : "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122 Safari/537.36";
+    const checks: AdCheck[] = [];
+    const add = (id: string, label: string, status: AdCheck["status"], detail: string) =>
+      checks.push({ id, label, status, detail });
+
+    let html = "", finalUrl = "", title = "", words = 0;
+    let loadMs = 0, httpsOk = false, redirectHops = 0, ok = false;
+    try {
+      const started = Date.now();
+      let url = `https://${domain}/`;
+      let res: Response | null = null;
+      for (let hop = 0; hop < 6; hop++) {
+        await assertPublicHost(new URL(url).hostname);
+        res = await fetch(url, { redirect: "manual", headers: { "User-Agent": ua }, signal: AbortSignal.timeout(20_000) });
+        if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
+          url = new URL(res.headers.get("location")!, url).toString();
+          redirectHops++;
+          continue;
+        }
+        break;
+      }
+      loadMs = Date.now() - started;
+      finalUrl = url;
+      httpsOk = finalUrl.startsWith("https://");
+      ok = !!(res && res.ok);
+      html = ok ? await res!.text() : "";
+      add("reachable", "Site loads (working destination)", ok ? "pass" : "fail",
+        ok ? `HTTP ${res!.status} in ${loadMs}ms` : `HTTP ${res?.status ?? "?"} — Google disapproves ads pointing to error pages`);
+    } catch (e: any) {
+      add("reachable", "Site loads (working destination)", "fail", `Could not load https://${domain}/ — ${e?.message ?? e?.code ?? e?.name ?? "network error"}`);
+    }
+
+    if (html) {
+      const lower = html.toLowerCase();
+      const text = html.replace(/<script[\s\S]*?<\/script>|<style[\s\S]*?<\/style>|<[^>]+>/g, " ");
+      words = text.split(/\s+/).filter(Boolean).length;
+      title = /<title[^>]*>([^<]{2,})<\/title>/i.exec(html)?.[1]?.trim() ?? "";
+
+      add("https", "HTTPS (secure destination)", httpsOk ? "pass" : "fail",
+        httpsOk ? `Serves over ${new URL(finalUrl).protocol}//` : "Final URL is not HTTPS — required for good ad rank");
+
+      const sameSite = (() => {
+        try {
+          const h = new URL(finalUrl).hostname.replace(/^www\./, "");
+          return h.endsWith(domain.replace(/^www\./, "").split(".").slice(-2).join("."));
+        } catch { return true; }
+      })();
+      add("destination-match", "No redirect to a different domain", sameSite ? "pass" : "fail",
+        sameSite ? "Lands on your own domain" : `Redirects to ${finalUrl} — destination mismatch is a policy violation`);
+
+      add("title", "Page has a clear title", title ? "pass" : "warn", title ? `"${title.slice(0, 80)}"` : "Missing <title> — hurts quality score");
+
+      // mobile-friendliness is a MOBILE concern → fail on mobile if missing, N/A on desktop
+      const viewport = /<meta[^>]+name=["']viewport["']/i.test(html);
+      if (isMobile) {
+        add("mobile", "Mobile friendly (viewport meta)", viewport ? "pass" : "fail",
+          viewport ? "Responsive viewport set" : "No viewport meta — page isn't mobile-optimised; Google penalises this on mobile");
+      } else {
+        add("mobile", "Renders on desktop", "pass", "Served desktop HTML");
+      }
+
+      const privacy = /privacy(\s|-)?policy|privacy<\/a>|\/privacy/i.test(lower);
+      add("privacy", "Privacy policy present", privacy ? "pass" : "fail",
+        privacy ? "Privacy policy link found" : "No privacy policy found — required when collecting any user data");
+
+      const contact = /tel:|mailto:|contact(\s|-)?us|contact<\/a>|\/contact/i.test(lower);
+      add("contact", "Contact information present", contact ? "pass" : "warn",
+        contact ? "Contact info/link found" : "No visible contact info — Google favors verifiable businesses");
+
+      const parked = /under construction|coming soon|domain (is )?parked|buy this domain|default web page|website (is )?being built/i.test(text);
+      add("parked", "Not a parked / under-construction page", parked ? "fail" : "pass",
+        parked ? "Page looks parked or unfinished — ads will be disapproved" : "Real content detected");
+
+      add("content", "Enough original content", words >= 120 ? "pass" : words >= 40 ? "warn" : "fail",
+        `${words} words of visible text${words < 120 ? " — thin content risks 'insufficient original content' disapproval" : ""}`);
+
+      // Google weighs mobile speed more strictly than desktop
+      const [good, okMs] = isMobile ? [3000, 6000] : [4000, 8000];
+      add("speed", "Loads fast", loadMs <= good ? "pass" : loadMs <= okMs ? "warn" : "fail",
+        `${loadMs}ms response — ${loadMs <= good ? "good" : isMobile ? "slow for mobile (Google is strict on mobile speed)" : "slow"}`);
+
+      const popups = (lower.match(/window\.open\(/g) ?? []).length;
+      const interstitial = /onbeforeunload|exit[-_ ]?intent|class=["'][^"']*(modal|popup|overlay|interstitial)/i.test(lower);
+      const badPop = popups > 1 || interstitial;
+      add("popups", "No aggressive pop-ups / interstitials", !badPop ? "pass" : "warn",
+        !badPop ? "No pop-up patterns found" : `Pop-up/interstitial patterns found${isMobile ? " — intrusive interstitials on MOBILE are specifically penalised by Google" : ""}`);
+
+      const secure = new URL(finalUrl || `https://${domain}/`).protocol === "https:";
+      add("redirects", "Short redirect chain", redirectHops <= 1 ? "pass" : redirectHops <= 3 ? "warn" : "fail",
+        redirectHops === 0 ? "No redirects" : `${redirectHops} redirect${redirectHops > 1 ? "s" : ""}${redirectHops > 3 ? " — long chains look like cloaking" : ""}`);
+
+      const metaRefresh = /<meta[^>]+http-equiv=["']?refresh["']?[^>]+content=["'][^"']*url=/i.test(html);
+      add("meta-refresh", "No sneaky meta-refresh redirect", metaRefresh ? "warn" : "pass",
+        metaRefresh ? "A <meta refresh> redirect was found — can be flagged as deceptive" : "No meta-refresh redirect");
+
+      const mixed = secure && /(?:src|href)=["']http:\/\//i.test(html) ? (html.match(/(?:src|href)=["']http:\/\//gi) || []).length : 0;
+      add("mixed-content", "No insecure (mixed) content", mixed === 0 ? "pass" : "warn",
+        mixed === 0 ? "All resources load over https" : `${mixed} resource(s) load over http:// on an https page`);
+
+      const noindex = /<meta[^>]+name=["']robots["'][^>]+content=["'][^"']*noindex/i.test(html);
+      add("indexable", "Page is indexable (no 'noindex')", noindex ? "fail" : "pass",
+        noindex ? "Page has <meta robots noindex> — Google won't review a blocked destination" : "No noindex directive");
+
+      const hasLang = /<html[^>]+lang=/i.test(html);
+      const hasCharset = /<meta[^>]+charset=/i.test(html);
+      add("locale", "Declares language & charset", hasLang && hasCharset ? "pass" : "warn",
+        `${hasLang ? "lang set" : "no lang"}, ${hasCharset ? "charset set" : "no charset"}`);
+
+      const metaDesc = /<meta[^>]+name=["']description["'][^>]+content=["']([^"']{1,})/i.exec(html)?.[1];
+      add("meta-description", "Has a meta description", metaDesc ? "pass" : "warn",
+        metaDesc ? `"${metaDesc.slice(0, 70)}"` : "No meta description — weaker quality signal");
+
+      const soft404 = /\b(404|page not found|page doesn'?t exist|nothing here|error 404)\b/i.test(text) && words < 200;
+      add("soft-404", "Not a soft error page", soft404 ? "fail" : "pass",
+        soft404 ? "Reads like a 'not found'/error page — treated as a broken destination" : "Real page, not an error");
+
+      const phone = /(?:tel:|(?:\+?\d[\d\s().-]{7,}\d))/.test(text);
+      const address = /\b\d{5,6}\b|street|road|\bst\.|avenue|\bave\b|suite|floor|p\.?o\.? box|pincode|zip/i.test(text);
+      add("business-info", "Business/contact details visible", phone || address ? "pass" : "warn",
+        phone || address ? `${phone ? "phone" : ""}${phone && address ? " + " : ""}${address ? "address" : ""} found` : "No phone or address — Google favours verifiable businesses");
+
+      const adUnits = (lower.match(/adsbygoogle|data-ad-client|<ins[^>]+adsbygoogle/g) || []).length;
+      const iframes = (lower.match(/<iframe/g) || []).length;
+      add("ad-density", "Not overloaded with ads", adUnits <= 3 && iframes <= 6 ? "pass" : "warn",
+        `${adUnits} ad unit(s), ${iframes} iframe(s)${adUnits > 3 || iframes > 6 ? " — too many ads vs content" : " — reasonable"}`);
+
+      const placeholder = /lorem ipsum|dolor sit amet|your text here|sample text|placeholder/i.test(text);
+      add("placeholder", "No placeholder / dummy text", placeholder ? "warn" : "pass",
+        placeholder ? "Found lorem-ipsum / placeholder text" : "No placeholder text");
+
+      const download = /<a[^>]+download|href=["'][^"']*\.(exe|apk|dmg|msi|zip|rar)["']/i.test(html);
+      add("download", "No forced downloads", download ? "warn" : "pass",
+        download ? "Links that download executables/archives were found" : "No forced-download links");
+
+      const obf = (lower.match(/eval\(|document\.write\(|atob\(|unescape\(|fromcharcode/g) || []).length;
+      add("scripts", "No obfuscated / risky scripts", obf <= 2 ? "pass" : "warn",
+        obf <= 2 ? "No suspicious script patterns" : `${obf} obfuscation patterns — can trip malware/cloaking checks`);
+
+      const riskTerms = ["replica", "counterfeit", "get rich quick", "guaranteed income", "miracle cure", "lose weight fast", "casino", "gambling", "payday loan", "essay writing", "hack ", "crack download", "buy followers"];
+      const hits = riskTerms.filter((t) => lower.includes(t));
+      add("prohibited", "No obvious prohibited-content terms", hits.length === 0 ? "pass" : "warn",
+        hits.length === 0 ? "No high-risk terms detected" : `Review terms Google may restrict: ${hits.slice(0, 5).join(", ")} (heuristic)`);
+    } else if (checks[0]?.status === "pass") {
+      add("content", "Enough original content", "warn", "Page loaded but returned no readable HTML");
+    }
+
+    return { checks, loadMs, html, finalUrl, words, title };
+  }
+
+  /** Checks that don't depend on device: crawlability + mobile-vs-desktop cloaking. */
+  private async sharedChecks(
+    domain: string,
+    mobile: { finalUrl: string; words: number; title: string },
+    desktop: { words: number; title: string },
+  ): Promise<AdCheck[]> {
+    const out: AdCheck[] = [];
+
+    // cloaking: serving very different content to mobile vs desktop is a policy violation
+    if (mobile.words > 0 && desktop.words > 0) {
+      const diff = Math.abs(mobile.words - desktop.words) / Math.max(mobile.words, desktop.words);
+      const titleDiff = mobile.title && desktop.title && mobile.title !== desktop.title;
+      const cloak = diff > 0.5 || titleDiff;
+      out.push({
+        id: "cloaking",
+        label: "Same content on mobile & desktop (no cloaking)",
+        status: cloak ? "warn" : "pass",
+        detail: cloak
+          ? `Mobile and desktop see different content (${mobile.words} vs ${desktop.words} words${titleDiff ? ", different titles" : ""}) — showing different content per device is cloaking, which Google prohibits`
+          : "Mobile and desktop see the same content",
+      });
+    }
+
+    // robots.txt full-block
+    try {
+      const base = new URL(mobile.finalUrl || `https://${domain}/`);
+      const rob = await fetch(`${base.origin}/robots.txt`, {
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; PushVault-AdsCheck/1.0)" },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (rob.ok) {
+        const txt = (await rob.text()).toLowerCase();
+        const blocksAll = /user-agent:\s*\*[\s\S]*?disallow:\s*\/\s*(\n|$)/.test(txt) && !/allow:\s*\//.test(txt);
+        out.push({
+          id: "robots",
+          label: "Crawlers not fully blocked (robots.txt)",
+          status: blocksAll ? "fail" : "pass",
+          detail: blocksAll ? "robots.txt disallows the whole site — Google can't crawl/review it" : "robots.txt allows crawling",
+        });
+      }
+    } catch {
+      /* no robots.txt — fine */
+    }
+    return out;
   }
 
   // ------------------------------------------------- campaigns

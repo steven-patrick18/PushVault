@@ -1523,19 +1523,51 @@ export default function PropertyDetail() {
             </span>
           )}
         </div>
-        {adsCheck?.checks && (
-          <table style={{ marginTop: 10 }}>
-            <tbody>
-              {adsCheck.checks.map((c: any) => (
-                <tr key={c.id}>
-                  <td style={{ width: 30 }}>{c.status === "pass" ? "✅" : c.status === "warn" ? "⚠️" : "❌"}</td>
-                  <td style={{ whiteSpace: "nowrap" }}>{c.label}</td>
-                  <td style={{ color: "var(--text-dim)", fontSize: 12 }}>{c.detail}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+        {(() => {
+          const icon = (s: string) => (s === "pass" ? "✅" : s === "warn" ? "⚠️" : "❌");
+          const table = (rows: any[]) => (
+            <table style={{ marginTop: 8 }}>
+              <tbody>
+                {rows.map((c: any) => (
+                  <tr key={c.id}>
+                    <td style={{ width: 30 }}>{icon(c.status)}</td>
+                    <td style={{ whiteSpace: "nowrap" }}>{c.label}</td>
+                    <td style={{ color: "var(--text-dim)", fontSize: 12 }}>{c.detail}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          );
+          const vBadge = (v: string, fails: number, warns: number) => (
+            <span className={"badge " + (v === "ready" ? "green" : v === "ready-with-warnings" ? "purple" : "red")}>
+              {v === "ready" ? "✓ Ready" : v === "ready-with-warnings" ? `⚠️ ${warns} warning(s)` : `❌ ${fails} issue(s)`}
+            </span>
+          );
+          // new per-device result
+          if (adsCheck?.devices) {
+            return (
+              <div style={{ marginTop: 10 }}>
+                {adsCheck.devices.map((d: any) => (
+                  <div key={d.device} style={{ marginBottom: 14 }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: 10, fontWeight: 700, fontSize: 14 }}>
+                      {d.label} {vBadge(d.verdict, d.fails, d.warns)}
+                      <span style={{ fontSize: 11, color: "var(--text-dim)" }}>{d.loadMs}ms load</span>
+                    </div>
+                    {table(d.checks)}
+                  </div>
+                ))}
+                {adsCheck.shared?.length > 0 && (
+                  <div>
+                    <div style={{ fontWeight: 700, fontSize: 14, marginTop: 4 }}>🔀 Cross-device &amp; crawl</div>
+                    {table(adsCheck.shared)}
+                  </div>
+                )}
+              </div>
+            );
+          }
+          // legacy flat result
+          return adsCheck?.checks ? table(adsCheck.checks) : null;
+        })()}
 
         <label style={{ marginTop: 16 }}>Step 2 — create a Search ad campaign for this site</label>
         {adsConnected === false && (
