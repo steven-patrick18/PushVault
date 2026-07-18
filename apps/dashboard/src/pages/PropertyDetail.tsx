@@ -37,7 +37,7 @@ interface PromptConfig {
     buttonFull?: boolean;
     buttonOrder?: "yes-first" | "no-first";
   };
-  audience?: { devices?: string[]; sources?: string[]; countries?: string[]; languages?: string[]; visitor?: "all" | "new" | "returning"; humansOnly?: boolean; blockDatacenter?: boolean; turnstile?: boolean };
+  audience?: { devices?: string[]; sources?: string[]; countries?: string[]; languages?: string[]; visitor?: "all" | "new" | "returning"; humansOnly?: boolean; blockDatacenter?: boolean; turnstile?: boolean; advBiometrics?: boolean; advVelocity?: boolean; advCanvasFarm?: boolean };
   popunder?: { enabled?: boolean; url?: string; delaySeconds?: number; everyHours?: number; everyValue?: number; everyUnit?: "minutes" | "hours" };
   reask: {
     enabled: boolean;
@@ -104,7 +104,7 @@ const DEFAULT_CFG: PromptConfig = {
     buttonFull: false,
     buttonOrder: "yes-first",
   },
-  audience: { devices: [], sources: [], countries: [], languages: [], visitor: "all", humansOnly: false, blockDatacenter: false, turnstile: false },
+  audience: { devices: [], sources: [], countries: [], languages: [], visitor: "all", humansOnly: false, blockDatacenter: false, turnstile: false, advBiometrics: false, advVelocity: false, advCanvasFarm: false },
   popunder: { enabled: false, url: "", delaySeconds: 5, everyValue: 12, everyUnit: "hours" },
   reask: { enabled: false, cooldown_value: 7, cooldown_unit: "days" },
 };
@@ -1093,6 +1093,61 @@ export default function PropertyDetail() {
                       </p>
                     </div>
                   )}
+
+                  {/* Advanced / experimental heuristics — opt-in, false-positive risk */}
+                  <div style={{ marginTop: 16, border: "1px solid #f59e0b55", borderRadius: 10, padding: "12px 14px", background: "#f59e0b0d" }}>
+                    <div style={{ fontWeight: 600, fontSize: 13, color: "#fbbf24" }}>⚠️ Advanced / experimental — may hide some real visitors</div>
+                    <p className="hint" style={{ margin: "4px 0 10px", fontSize: 12, opacity: 0.8 }}>
+                      These are aggressive heuristics from the bot-detection arms race. They’re tuned
+                      conservatively (they only act on strong robotic patterns), but unlike the checks
+                      above they <b>can</b> occasionally block a genuine person. Leave them off unless
+                      you’re fighting real, persistent bot abuse — and watch your opt-in rate after
+                      turning one on. Each needs “humans only” behaviour, so they build on it.
+                    </p>
+
+                    <label style={{ display: "flex", gap: 8, alignItems: "flex-start", fontWeight: 400 }}>
+                      <input type="checkbox" checked={aud.advBiometrics === true}
+                        onChange={(e) => setAud({ advBiometrics: e.target.checked })} />
+                      <span>
+                        🖱️ Mouse-path biometrics
+                        <span className="hint" style={{ display: "block", fontSize: 12, opacity: 0.7 }}>
+                          Studies the shape of cursor movement. Real cursors curve and jitter; scripted
+                          ones move in perfectly straight lines or teleport between points. Desktop only
+                          (no effect on touch). ⚠️ A user on a trackpad or assistive device who moves very
+                          precisely could look robotic.
+                        </span>
+                      </span>
+                    </label>
+
+                    <label style={{ display: "flex", gap: 8, alignItems: "flex-start", fontWeight: 400, marginTop: 10 }}>
+                      <input type="checkbox" checked={aud.advVelocity === true}
+                        onChange={(e) => setAud({ advVelocity: e.target.checked })} />
+                      <span>
+                        📈 Velocity &amp; timing modelling
+                        <span className="hint" style={{ display: "block", fontSize: 12, opacity: 0.7 }}>
+                          Human cursor speed varies a lot — it accelerates then slows down. A bot often
+                          glides at a near-constant speed. Flags movement whose speed barely varies over
+                          many samples. Desktop only. ⚠️ Rare, very steady movers could be caught.
+                        </span>
+                      </span>
+                    </label>
+
+                    <label style={{ display: "flex", gap: 8, alignItems: "flex-start", fontWeight: 400, marginTop: 10 }}>
+                      <input type="checkbox" checked={aud.advCanvasFarm === true}
+                        onChange={(e) => setAud({ advCanvasFarm: e.target.checked })} />
+                      <span>
+                        🧬 Canvas-fingerprint farm detection
+                        <span className="hint" style={{ display: "block", fontSize: 12, opacity: 0.7 }}>
+                          Bot farms clone one browser profile across many machines, so the exact same
+                          device fingerprint shows up from lots of different IPs. We hash the fingerprint
+                          (never stored as an identity, IPs are hashed) and block it once the same one
+                          appears from 10+ IPs in 30 min. ⚠️ Large offices/universities behind one gateway
+                          with identical managed PCs can trip this. A farm that randomises its fingerprint
+                          slips through — this catches the naïve ones.
+                        </span>
+                      </span>
+                    </label>
+                  </div>
                 </>
               );
             })()}

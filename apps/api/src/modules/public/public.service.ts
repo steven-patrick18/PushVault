@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from "@nestjs/common";
+import { createHash } from "node:crypto";
 import { UAParser } from "ua-parser-js";
 import { PrismaService } from "../../infra/prisma.service";
 import { GeoService } from "./geo.service";
@@ -147,6 +148,40 @@ export class PublicService {
     } catch {
       return { ok: true }; // Cloudflare unreachable → don't punish real users
     }
+  }
+
+  /**
+   * EXPERIMENTAL canvas-fingerprint farm detection. Counts how many DISTINCT IPs
+   * present the same device fingerprint within a rolling window. A household
+   * shares 1–3 IPs; a botnet of cloned browser profiles reuses one fingerprint
+   * across dozens. IPs are hashed (never stored raw) and the whole structure is
+   * in-memory only, bounded, and expires. Origin-checked. Returns { farm }.
+   */
+  private fpMap = new Map<string, Map<string, number>>(); // fp -> hashedIp -> lastSeenMs
+  private static readonly FP_WINDOW_MS = 30 * 60 * 1000;
+  private static readonly FP_FARM_IPS = 10; // same fingerprint from ≥10 IPs = farm
+  private static readonly FP_MAX_ENTRIES = 20000; // memory bound
+
+  async recordFingerprint(propertyKey: string, fp: string, ip: string | undefined, origin: string | undefined) {
+    await this.resolveProperty(propertyKey, origin); // Origin gate
+    if (!fp || fp.length > 64) return { farm: false };
+    const now = Date.now();
+    const hashedIp = ip ? createHash("sha1").update(ip).digest("base64").slice(0, 16) : "0";
+    let ips = this.fpMap.get(fp);
+    if (!ips) {
+      // simple memory bound: drop the oldest bucket when full
+      if (this.fpMap.size >= PublicService.FP_MAX_ENTRIES) {
+        const oldest = this.fpMap.keys().next().value;
+        if (oldest !== undefined) this.fpMap.delete(oldest);
+      }
+      ips = new Map();
+      this.fpMap.set(fp, ips);
+    }
+    ips.set(hashedIp, now);
+    // expire stale IPs for this fingerprint
+    for (const [k, ts] of ips) if (now - ts > PublicService.FP_WINDOW_MS) ips.delete(k);
+    if (ips.size === 0) this.fpMap.delete(fp);
+    return { farm: ips.size >= PublicService.FP_FARM_IPS };
   }
 
   async subscribe(input: SubscribeInput, origin: string | undefined, ip: string | undefined, userAgent: string | undefined) {

@@ -71,6 +71,16 @@ class TurnstileDto {
   token: string;
 }
 
+class FingerprintDto {
+  @IsString()
+  @IsNotEmpty()
+  property_key: string;
+
+  @IsString()
+  @IsNotEmpty()
+  fp: string;
+}
+
 class PageviewDto {
   @IsString()
   @IsNotEmpty()
@@ -169,6 +179,20 @@ export class PublicController {
     @Headers("origin") origin?: string,
   ) {
     return this.service.verifyTurnstile(dto.property_key, dto.token, ip, origin);
+  }
+
+  /** EXPERIMENTAL canvas-fingerprint farm check — returns { farm } when the same
+   * device fingerprint is being reused across many IPs. */
+  @Post("fp")
+  @HttpCode(200)
+  @Header("Cache-Control", "no-store")
+  @RateLimit({ limit: 60, windowSec: 60, perProperty: true })
+  fingerprint(
+    @Body() dto: FingerprintDto,
+    @Ip() ip: string,
+    @Headers("origin") origin?: string,
+  ) {
+    return this.service.recordFingerprint(dto.property_key, dto.fp, ip, origin);
   }
 
   /**

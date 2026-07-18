@@ -73,6 +73,9 @@ interface PromptConfig {
     humansOnly?: boolean; // skip bots / crawlers / headless automation
     blockDatacenter?: boolean; // also skip datacenter/cloud/VPN IPs (server-resolved)
     turnstile?: boolean; // require a Cloudflare Turnstile pass before showing
+    advBiometrics?: boolean; // EXPERIMENTAL: flag robotic (perfectly straight/teleporting) mouse paths
+    advVelocity?: boolean; // EXPERIMENTAL: flag inhumanly constant mouse velocity / timing
+    advCanvasFarm?: boolean; // EXPERIMENTAL: flag reused device fingerprints across many IPs (bot farms)
   };
 }
 
@@ -711,12 +714,21 @@ interface RemoteConfig {
       renderBanner(cfg);
     };
     // humans-only: hold the prompt until a real interaction is observed, so a
-    // silent (never-moving) automated session never sees it. Then, if Turnstile
-    // is enabled, run the invisible challenge before rendering.
+    // silent (never-moving) automated session never sees it. Then run any enabled
+    // gates in order: experimental client heuristics → canvas-farm → Turnstile.
+    const aud = cfg.prompt_config?.audience;
+    const needHuman = humansOnly || aud?.advBiometrics === true || aud?.advVelocity === true;
     const fire = () => {
-      const gated = () => turnstileGate(cfg, render); // no-op if Turnstile is off
-      if (humansOnly) whenHuman(gated);
-      else gated();
+      const afterHuman = () => {
+        // experimental client-side checks (sync). Each only flags strong robotic
+        // patterns; no data → no flag, so real visitors aren't hidden.
+        if (aud?.advBiometrics && mousePathIsRobotic()) return;
+        if (aud?.advVelocity && velocityIsRobotic()) return;
+        // async gates: canvas-farm (server) → Turnstile (Cloudflare) → render
+        canvasFarmGate(cfg, () => turnstileGate(cfg, render));
+      };
+      if (needHuman) whenHuman(afterHuman);
+      else afterHuman();
     };
     if (trigger.type === "immediate") {
       fire();
@@ -878,6 +890,22 @@ interface RemoteConfig {
       HUMAN_EVENTS.forEach((t) => addEventListener(t, onEv, { passive: true } as any));
     } catch { /* ignore */ }
   })();
+
+  // motion recorder for the EXPERIMENTAL biometrics/velocity checks: a small ring
+  // of recent mouse samples {t,x,y}. Cheap, capped, desktop-only (touch produces
+  // none). Only used when advBiometrics/advVelocity are enabled.
+  const pvStart = Date.now();
+  const pvMoves: { t: number; x: number; y: number }[] = [];
+  try {
+    addEventListener("mousemove", (e: MouseEvent) => {
+      const t = Date.now() - pvStart;
+      const last = pvMoves[pvMoves.length - 1];
+      if (last && t - last.t < 8) return; // light throttle
+      pvMoves.push({ t, x: e.clientX, y: e.clientY });
+      if (pvMoves.length > 80) pvMoves.shift();
+    }, { passive: true } as any);
+  } catch { /* ignore */ }
+
   // fire cb once we're confident a human is present: they've already interacted,
   // or browsed more than one page this session. Otherwise wait for the first real
   // interaction. A bot that never interacts never fires — which is the point.
@@ -891,6 +919,106 @@ interface RemoteConfig {
       cb();
     };
     HUMAN_EVENTS.forEach((t) => addEventListener(t, wait, { passive: true } as any));
+  }
+
+  // ---- EXPERIMENTAL advanced heuristics (opt-in, may hide real visitors) -----
+  // All are conservative: they only flag STRONG robotic patterns and require
+  // enough data, so a lack of signal never hides a real person.
+
+  // Mouse-path biometrics: real cursors curve and jitter; scripted movement is
+  // perfectly straight or teleports between points.
+  function mousePathIsRobotic(): boolean {
+    const p = pvMoves;
+    if (p.length < 12) return false; // not enough movement to judge → don't flag
+    const a = p[0], b = p[p.length - 1];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len = Math.hypot(dx, dy) || 1;
+    let maxDev = 0;
+    for (let i = 1; i < p.length - 1; i++) {
+      // perpendicular distance of each point from the straight line a→b
+      const dev = Math.abs(dx * (a.y - p[i].y) - (a.x - p[i].x) * dy) / len;
+      if (dev > maxDev) maxDev = dev;
+    }
+    let teleports = 0;
+    for (let i = 1; i < p.length; i++) {
+      const d = Math.hypot(p[i].x - p[i - 1].x, p[i].y - p[i - 1].y);
+      if (d > 300 && p[i].t - p[i - 1].t <= 1) teleports++; // big jump, no time = injected
+    }
+    // a long path that stays within 2px of a straight line is machine-drawn
+    return (len > 150 && maxDev < 2) || teleports >= 2;
+  }
+
+  // Velocity/timing modeling: human cursor speed varies a lot (accelerate then
+  // decelerate); a bot often moves at a near-constant speed.
+  function velocityIsRobotic(): boolean {
+    const p = pvMoves;
+    if (p.length < 14) return false;
+    const vs: number[] = [];
+    for (let i = 1; i < p.length; i++) {
+      const dt = p[i].t - p[i - 1].t;
+      if (dt > 0) vs.push(Math.hypot(p[i].x - p[i - 1].x, p[i].y - p[i - 1].y) / dt);
+    }
+    if (vs.length < 10) return false;
+    const mean = vs.reduce((s, v) => s + v, 0) / vs.length;
+    if (mean <= 0) return false;
+    const variance = vs.reduce((s, v) => s + (v - mean) * (v - mean), 0) / vs.length;
+    const cv = Math.sqrt(variance) / mean; // coefficient of variation
+    return cv < 0.08; // <8% speed variation over many samples = robotic
+  }
+
+  // Canvas / device fingerprint — used only for farm detection (never stored as
+  // an identity). A hash of rendering + a few device props.
+  function pvHash(s: string): string {
+    let h = 0x811c9dc5;
+    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 0x01000193); }
+    return (h >>> 0).toString(36);
+  }
+  function computeFingerprint(): string {
+    const parts: string[] = [];
+    try {
+      parts.push(navigator.userAgent || "");
+      parts.push((navigator.language || "") + "|" + ((navigator.languages || []) as string[]).join(","));
+      parts.push(String((navigator as any).hardwareConcurrency || "") + "/" + String((navigator as any).deviceMemory || ""));
+      parts.push(screen.width + "x" + screen.height + "x" + (screen.colorDepth || ""));
+      parts.push(String(new Date().getTimezoneOffset()));
+      try {
+        const c = document.createElement("canvas"); c.width = 200; c.height = 40;
+        const ctx = c.getContext("2d");
+        if (ctx) {
+          ctx.textBaseline = "top"; ctx.font = "14px Arial";
+          ctx.fillStyle = "#f60"; ctx.fillRect(0, 0, 100, 20);
+          ctx.fillStyle = "#069"; ctx.fillText("PushVault:@#", 2, 15);
+          parts.push(c.toDataURL());
+        }
+      } catch { /* ignore */ }
+      try {
+        const cv = document.createElement("canvas");
+        const gl = (cv.getContext("webgl") || cv.getContext("experimental-webgl")) as WebGLRenderingContext | null;
+        if (gl) {
+          const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+          parts.push(dbg ? String(gl.getParameter((dbg as any).UNMASKED_RENDERER_WEBGL) || "") : "");
+        }
+      } catch { /* ignore */ }
+    } catch { /* ignore */ }
+    return pvHash(parts.join("|"));
+  }
+  // Ask the server whether this fingerprint is being reused across many IPs (a
+  // farm of cloned browser profiles). Fails OPEN on any error.
+  function canvasFarmGate(cfg: RemoteConfig, cb: () => void) {
+    if (!cfg.prompt_config?.audience?.advCanvasFarm) { cb(); return; }
+    let settled = false;
+    const done = (show: boolean) => { if (settled) return; settled = true; clearTimeout(safety); if (show) cb(); };
+    const safety = setTimeout(() => done(true), 6000);
+    try {
+      fetch(API + "/fp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ property_key: propertyKey, fp: computeFingerprint() }),
+      })
+        .then((r) => r.json())
+        .then((j) => done(!(j && j.farm === true))) // farm → hide
+        .catch(() => done(true)); // network error → fail open
+    } catch { done(true); }
   }
 
   // ---- Cloudflare Turnstile: invisible bot-network verification (opt-in per
