@@ -72,6 +72,15 @@ class UpdateUserAccessDto {
   @IsArray()
   @IsString({ each: true })
   allowedPages?: string[];
+
+  @IsOptional()
+  @IsEmail()
+  email?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(8)
+  password?: string;
 }
 
 @Controller()
@@ -201,6 +210,14 @@ export class SettingsController {
     if (role === "client" && (data.propertyIds ?? target.propertyIds).length === 0) {
       throw new BadRequestException("Client users need at least one property assigned");
     }
+    // change email (must stay unique) and/or reset the password
+    if (dto.email && dto.email.toLowerCase().trim() !== target.email) {
+      const email = dto.email.toLowerCase().trim();
+      const clash = await this.prisma.system.user.findUnique({ where: { email } });
+      if (clash && clash.id !== id) throw new BadRequestException("That email is already in use");
+      data.email = email;
+    }
+    if (dto.password) data.passwordHash = hashSecret(dto.password);
     const updated = await db.user.update({
       where: { id },
       data,
@@ -213,7 +230,7 @@ export class SettingsController {
         action: "user.update_access",
         entityType: "user",
         entityId: id,
-        after: { role: updated.role, allowedPages: updated.allowedPages } as any,
+        after: { role: updated.role, allowedPages: updated.allowedPages, emailChanged: !!data.email, passwordReset: !!dto.password } as any,
       },
     });
     return { ...updated, note: "The user must sign out and back in for changes to take effect." };

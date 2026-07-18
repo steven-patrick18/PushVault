@@ -59,7 +59,7 @@ export default function Settings() {
   const [gadsSaving, setGadsSaving] = useState(false);
   const [allPages, setAllPages] = useState<{ key: string; label: string }[]>([]);
   const [editAccess, setEditAccess] = useState<User | null>(null);
-  const [accessDraft, setAccessDraft] = useState<{ role: string; allowedPages: string[]; propertyIds: string[] }>({ role: "manager", allowedPages: [], propertyIds: [] });
+  const [accessDraft, setAccessDraft] = useState<{ role: string; allowedPages: string[]; propertyIds: string[]; email: string; password: string }>({ role: "manager", allowedPages: [], propertyIds: [], email: "", password: "" });
 
   const load = () => {
     api<Tenant>("/tenant").then(setTenant).catch((e) => setError(e.message));
@@ -105,23 +105,28 @@ export default function Settings() {
 
   function openAccess(u: User) {
     setEditAccess(u);
-    setAccessDraft({ role: u.role, allowedPages: u.allowedPages ?? [], propertyIds: u.propertyIds ?? [] });
+    setAccessDraft({ role: u.role, allowedPages: u.allowedPages ?? [], propertyIds: u.propertyIds ?? [], email: u.email, password: "" });
     setError("");
   }
 
   async function saveAccess() {
     if (!editAccess) return;
+    if (accessDraft.password && accessDraft.password.length < 8) {
+      setError("New password must be at least 8 characters (or leave it blank)");
+      return;
+    }
     try {
-      await api(`/users/${editAccess.id}`, {
-        method: "PATCH",
-        body: JSON.stringify({
-          role: accessDraft.role,
-          allowedPages: accessDraft.allowedPages,
-          propertyIds: accessDraft.propertyIds,
-        }),
-      });
+      const body: any = {
+        role: accessDraft.role,
+        allowedPages: accessDraft.allowedPages,
+        propertyIds: accessDraft.propertyIds,
+      };
+      if (accessDraft.email && accessDraft.email !== editAccess.email) body.email = accessDraft.email;
+      if (accessDraft.password) body.password = accessDraft.password;
+      await api(`/users/${editAccess.id}`, { method: "PATCH", body: JSON.stringify(body) });
       setEditAccess(null);
-      setMsg("Access updated — the user must sign out and back in for it to take effect.");
+      setMsg("User updated — they must sign out and back in for it to take effect.");
+      setError("");
       load();
     } catch (e: any) {
       setError(e.message);
@@ -409,7 +414,7 @@ export default function Settings() {
                   {u.lastLoginAt ? new Date(u.lastLoginAt).toLocaleString() : "never"}
                 </td>
                 <td style={{ whiteSpace: "nowrap" }}>
-                  <button className="btn secondary small" onClick={() => openAccess(u)}>Access</button>{" "}
+                  <button className="btn secondary small" onClick={() => openAccess(u)}>Edit</button>{" "}
                   <button className="btn secondary small" onClick={() => removeUser(u.id)}>🗑</button>
                 </td>
               </tr>
@@ -421,8 +426,18 @@ export default function Settings() {
       {editAccess && (
         <div className="modal-backdrop" onClick={() => setEditAccess(null)}>
           <div className="modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 460 }}>
-            <h2>Access — {editAccess.email}</h2>
-            <label>Role (what they can do)</label>
+            <h2>Edit user — {editAccess.email}</h2>
+
+            <label>Email (login)</label>
+            <input type="email" value={accessDraft.email}
+              onChange={(e) => setAccessDraft({ ...accessDraft, email: e.target.value })} />
+
+            <label style={{ marginTop: 12 }}>Reset password (leave blank to keep current)</label>
+            <input type="text" autoComplete="new-password" placeholder="New password (min 8 chars)"
+              value={accessDraft.password}
+              onChange={(e) => setAccessDraft({ ...accessDraft, password: e.target.value })} />
+
+            <label style={{ marginTop: 12 }}>Role (what they can do)</label>
             <select value={accessDraft.role} onChange={(e) => setAccessDraft({ ...accessDraft, role: e.target.value })}>
               <option value="admin">Admin — full control</option>
               <option value="manager">Manager — full except billing/plan</option>
@@ -467,11 +482,11 @@ export default function Settings() {
             </div>
 
             <div style={{ display: "flex", gap: 10, marginTop: 18 }}>
-              <button className="btn" onClick={saveAccess}>Save access</button>
+              <button className="btn" onClick={saveAccess}>Save changes</button>
               <button className="btn secondary" onClick={() => setEditAccess(null)}>Cancel</button>
             </div>
             <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 10 }}>
-              The user must sign out and back in for access changes to apply.
+              The user must sign out and back in for changes to apply.
             </div>
           </div>
         </div>
