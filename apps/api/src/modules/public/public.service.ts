@@ -100,16 +100,21 @@ export class PublicService {
     const property = await this.resolveProperty(propertyKey, origin);
     // resolve the visitor's country for audience targeting (null if no GeoIP DB)
     let visitorCountry: string | null = null;
+    let visitorDatacenter = false;
     try {
       visitorCountry = this.geo.lookup(ip)?.country ?? null;
+      // spoof-proof bot signal: is this IP on a datacenter/cloud/VPN network?
+      visitorDatacenter = this.geo.isDatacenter(ip);
     } catch {
       visitorCountry = null;
+      visitorDatacenter = false;
     }
     return {
       prompt_config: property.promptConfig,
       icon_url: property.iconUrl,
       vapid_public_key: property.vapidPublic ?? process.env.VAPID_PUBLIC_KEY,
       visitor_country: visitorCountry,
+      visitor_datacenter: visitorDatacenter,
     };
   }
 

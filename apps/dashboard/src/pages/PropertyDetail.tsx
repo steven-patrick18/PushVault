@@ -37,7 +37,7 @@ interface PromptConfig {
     buttonFull?: boolean;
     buttonOrder?: "yes-first" | "no-first";
   };
-  audience?: { devices?: string[]; sources?: string[]; countries?: string[]; languages?: string[]; visitor?: "all" | "new" | "returning"; humansOnly?: boolean };
+  audience?: { devices?: string[]; sources?: string[]; countries?: string[]; languages?: string[]; visitor?: "all" | "new" | "returning"; humansOnly?: boolean; blockDatacenter?: boolean };
   popunder?: { enabled?: boolean; url?: string; delaySeconds?: number; everyHours?: number; everyValue?: number; everyUnit?: "minutes" | "hours" };
   reask: {
     enabled: boolean;
@@ -102,7 +102,7 @@ const DEFAULT_CFG: PromptConfig = {
     buttonFull: false,
     buttonOrder: "yes-first",
   },
-  audience: { devices: [], sources: [], countries: [], languages: [], visitor: "all", humansOnly: false },
+  audience: { devices: [], sources: [], countries: [], languages: [], visitor: "all", humansOnly: false, blockDatacenter: false },
   popunder: { enabled: false, url: "", delaySeconds: 5, everyValue: 12, everyUnit: "hours" },
   reask: { enabled: false, cooldown_value: 7, cooldown_unit: "days" },
 };
@@ -1004,13 +1004,26 @@ export default function PropertyDetail() {
                     🤖 Show to real humans only — skip bots, crawlers &amp; headless automation
                   </label>
                   {aud.humansOnly && (
-                    <p className="hint" style={{ margin: "6px 0 0 26px", fontSize: 12, opacity: 0.7 }}>
-                      Checks the same signals Google-style bot detection uses: automation flags
-                      (webdriver / headless), a mobile browser with no touchscreen, software-only
-                      graphics (no real GPU), and — before showing — waits for a genuine human
-                      interaction (mouse move, scroll, tap or key) or multi-page browsing.
-                      Only strong signals count, so real visitors are never hidden.
-                    </p>
+                    <>
+                      <p className="hint" style={{ margin: "6px 0 0 26px", fontSize: 12, opacity: 0.7 }}>
+                        Checks the same signals Google-style bot detection uses: automation flags
+                        (webdriver / headless), a mobile browser with no touchscreen, software-only
+                        graphics (no real GPU), and — before showing — waits for a genuine human
+                        interaction (mouse move, scroll, tap or key) or multi-page browsing.
+                        Only strong signals count, so real visitors are never hidden.
+                      </p>
+                      <label style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 400, marginTop: 10, marginLeft: 26 }}>
+                        <input type="checkbox" checked={aud.blockDatacenter === true}
+                          onChange={(e) => setAud({ blockDatacenter: e.target.checked })} />
+                        🛰️ Also block datacenter / cloud / VPN traffic
+                      </label>
+                      <p className="hint" style={{ margin: "4px 0 0 52px", fontSize: 12, opacity: 0.7 }}>
+                        Strongest filter — resolved from the real connection IP on our server, so a
+                        bot can't fake it. Blocks traffic from AWS, Google Cloud, Azure, OVH, Hetzner
+                        &amp; similar hosting networks. Note: this also hides the prompt from visitors
+                        browsing through a VPN.
+                      </p>
+                    </>
                   )}
                 </>
               );

@@ -71,6 +71,7 @@ interface PromptConfig {
     languages?: string[]; // ISO language prefix, e.g. "en", "hi"
     visitor?: "all" | "new" | "returning";
     humansOnly?: boolean; // skip bots / crawlers / headless automation
+    blockDatacenter?: boolean; // also skip datacenter/cloud/VPN IPs (server-resolved)
   };
 }
 
@@ -79,6 +80,7 @@ interface RemoteConfig {
   icon_url: string | null;
   vapid_public_key: string;
   visitor_country?: string | null; // server-resolved from IP (GeoIP)
+  visitor_datacenter?: boolean; // server-resolved: IP is a datacenter/cloud/VPN network
 }
 
 (function () {
@@ -891,6 +893,9 @@ interface RemoteConfig {
     const a = cfg.prompt_config?.audience;
     if (!a) return true;
     if (a.humansOnly && isLikelyBot()) return false;
+    // datacenter/cloud/VPN traffic (server-resolved from the real client IP —
+    // spoof-proof, catches bots that pass every browser-side check)
+    if (a.blockDatacenter && cfg.visitor_datacenter === true) return false;
     if (a.devices && a.devices.length && a.devices.indexOf(pvDevice()) < 0) return false;
     if (a.sources && a.sources.length && a.sources.indexOf(pvSource()) < 0) return false;
     if (a.languages && a.languages.length) {
