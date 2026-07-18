@@ -1003,6 +1003,15 @@ export default function PropertyDetail() {
                       onChange={(e) => setAud({ humansOnly: e.target.checked })} />
                     🤖 Show to real humans only — skip bots, crawlers &amp; headless automation
                   </label>
+                  {aud.humansOnly && (
+                    <p className="hint" style={{ margin: "6px 0 0 26px", fontSize: 12, opacity: 0.7 }}>
+                      Checks the same signals Google-style bot detection uses: automation flags
+                      (webdriver / headless), a mobile browser with no touchscreen, software-only
+                      graphics (no real GPU), and — before showing — waits for a genuine human
+                      interaction (mouse move, scroll, tap or key) or multi-page browsing.
+                      Only strong signals count, so real visitors are never hidden.
+                    </p>
+                  )}
                 </>
               );
             })()}

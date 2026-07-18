@@ -699,11 +699,18 @@ interface RemoteConfig {
 
   function arm(cfg: RemoteConfig) {
     const trigger = cfg.prompt_config?.trigger ?? { type: "delay", seconds: 12 };
+    const humansOnly = cfg.prompt_config?.audience?.humansOnly === true;
     let fired = false;
-    const fire = () => {
+    const render = () => {
       if (fired) return;
       fired = true;
       renderBanner(cfg);
+    };
+    // humans-only: hold the prompt until a real interaction is observed, so a
+    // silent (never-moving) automated session never sees it.
+    const fire = () => {
+      if (humansOnly) whenHuman(render);
+      else render();
     };
     if (trigger.type === "immediate") {
       fire();
@@ -769,6 +776,16 @@ interface RemoteConfig {
 
   // ---- audience targeting: decide whether THIS visitor should see the prompt
   const LS_SEEN = "pv_seen_" + propertyKey;
+  // page-sequence: how many pages this visitor has viewed this session. Real
+  // people browse several pages; most bots hit a single URL. Counted once/load.
+  const SS_PAGES = "pv_pages_" + propertyKey;
+  const pvPages = (() => {
+    try {
+      const n = (parseInt(sessionStorage.getItem(SS_PAGES) || "0", 10) || 0) + 1;
+      sessionStorage.setItem(SS_PAGES, String(n));
+      return n;
+    } catch { return 1; }
+  })();
   function pvDevice(): string {
     const ua = navigator.userAgent || "";
     if (/iPad|Tablet|PlayBook|Silk|Android(?!.*Mobile)/i.test(ua)) return "tablet";
@@ -796,19 +813,78 @@ interface RemoteConfig {
       return "other";
     }
   }
-  // Conservative bot/crawler/automation detection — only strong signals, so we
-  // never hide the prompt from a real person. Most crawlers don't run JS at all;
-  // this catches headless automation (Puppeteer/Selenium) and self-identified bots.
+  // Bot/crawler/automation detection. Only strong or self-contradictory signals,
+  // so we never hide the prompt from a real person. Mirrors the environmental
+  // checks reCAPTCHA-style systems use: headless flags, a mobile UA with no
+  // touchscreen, and software (non-GPU) graphics that betray a virtualised browser.
+  let _botCache: boolean | undefined;
   function isLikelyBot(): boolean {
+    if (_botCache === undefined) _botCache = computeBot();
+    return _botCache;
+  }
+  function computeBot(): boolean {
     try {
       const ua = navigator.userAgent || "";
       if ((navigator as any).webdriver === true) return true;
       if (/HeadlessChrome|Headless/i.test(ua)) return true;
       if (/bot\b|crawler|crawl |spider|slurp|scrapy|phantom|puppeteer|playwright|selenium|headless|python-requests|python-urllib|\bcurl\/|\bwget\/|lighthouse|gtmetrix|pingdom|pagespeed|facebookexternalhit|bingpreview|whatsapp|telegrambot|embedly|prerender|apache-httpclient|axios\//i.test(ua)) return true;
+      // touchscreen consistency: a phone/tablet UA with zero touch support is an
+      // emulated (headless) device, not a real handset.
+      const claimsMobile = /Mobi|iPhone|iPod|iPad|Android|Windows Phone|Tablet/i.test(ua);
+      const hasTouch = (navigator.maxTouchPoints || 0) > 0 || "ontouchstart" in window;
+      if (claimsMobile && !hasTouch) return true;
+      // graphics: virtualised/headless browsers fall back to a software renderer
+      // (SwiftShader/llvmpipe) instead of a real GPU. Real devices almost never do.
+      try {
+        const cv = document.createElement("canvas");
+        const gl = (cv.getContext("webgl") || cv.getContext("experimental-webgl")) as WebGLRenderingContext | null;
+        if (gl) {
+          const dbg = gl.getExtension("WEBGL_debug_renderer_info");
+          const r = dbg ? String(gl.getParameter((dbg as any).UNMASKED_RENDERER_WEBGL) || "") : "";
+          if (r && /swiftshader|llvmpipe|mesa offscreen|softwarerasterizer|microsoft basic render/i.test(r)) return true;
+        }
+      } catch { /* ignore */ }
       return false;
     } catch {
       return false;
     }
+  }
+
+  // human-presence signal: a real person moves the mouse, scrolls, taps or types.
+  // We watch for the first genuine interaction so "humans only" can hold the
+  // prompt until we've actually observed one.
+  let pvHuman = false;
+  const HUMAN_EVENTS = ["mousemove", "scroll", "keydown", "touchstart", "pointerdown", "wheel"];
+  (function armHumanSignal() {
+    try {
+      let lx = -1, ly = -1;
+      const onEv = (e: Event) => {
+        if (e.type === "mousemove") {
+          // need two samples with real movement — a single synthetic mousemove
+          // (some bots dispatch one) shouldn't count.
+          const m = e as MouseEvent;
+          if (lx < 0) { lx = m.clientX; ly = m.clientY; return; }
+          if (Math.abs(m.clientX - lx) + Math.abs(m.clientY - ly) < 3) return;
+        }
+        pvHuman = true;
+        HUMAN_EVENTS.forEach((t) => removeEventListener(t, onEv as any));
+      };
+      HUMAN_EVENTS.forEach((t) => addEventListener(t, onEv, { passive: true } as any));
+    } catch { /* ignore */ }
+  })();
+  // fire cb once we're confident a human is present: they've already interacted,
+  // or browsed more than one page this session. Otherwise wait for the first real
+  // interaction. A bot that never interacts never fires — which is the point.
+  function whenHuman(cb: () => void) {
+    if (pvHuman || pvPages >= 2) { cb(); return; }
+    let done = false;
+    const wait = () => {
+      if (done || !pvHuman) return;
+      done = true;
+      HUMAN_EVENTS.forEach((t) => removeEventListener(t, wait as any));
+      cb();
+    };
+    HUMAN_EVENTS.forEach((t) => addEventListener(t, wait, { passive: true } as any));
   }
 
   function audienceMatches(cfg: RemoteConfig): boolean {
