@@ -234,13 +234,14 @@ export class GoogleAdsService {
     let finalUrl = "";
     let loadMs = 0;
     let httpsOk = false;
+    let redirectHops = 0;
     try {
       const started = Date.now();
       // follow redirects manually, re-validating each hop's host so a public
       // page can't bounce us to an internal IP (SSRF)
       let url = `https://${domain}/`;
       let res: Response | null = null;
-      for (let hop = 0; hop < 4; hop++) {
+      for (let hop = 0; hop < 6; hop++) {
         await assertPublicHost(new URL(url).hostname);
         res = await fetch(url, {
           redirect: "manual",
@@ -249,6 +250,7 @@ export class GoogleAdsService {
         });
         if (res.status >= 300 && res.status < 400 && res.headers.get("location")) {
           url = new URL(res.headers.get("location")!, url).toString();
+          redirectHops++;
           continue;
         }
         break;
@@ -309,10 +311,100 @@ export class GoogleAdsService {
         `${loadMs}ms server response — ${loadMs <= 3000 ? "good" : "slow pages raise CPC and get disapproved at extremes"}`);
 
       const popups = (lower.match(/window\.open\(/g) ?? []).length;
-      add("popups", "No aggressive pop-ups detected", popups <= 1 ? "pass" : "warn",
-        popups <= 1 ? "No pop-up patterns found" : `${popups} window.open() calls found — intrusive interstitials violate policy`);
+      const interstitial = /onbeforeunload|exit[-_ ]?intent|class=["'][^"']*(modal|popup|overlay|interstitial)/i.test(lower);
+      add("popups", "No aggressive pop-ups / interstitials", popups <= 1 && !interstitial ? "pass" : "warn",
+        popups <= 1 && !interstitial ? "No pop-up patterns found" : `Pop-up/interstitial patterns found (${popups} window.open${interstitial ? ", overlay/exit-intent markers" : ""}) — Google penalises intrusive interstitials`);
+
+      // ---- deeper policy signals ----
+      const secure = new URL(finalUrl || `https://${domain}/`).protocol === "https:";
+
+      // redirect chain length
+      add("redirects", "Short redirect chain", redirectHops <= 1 ? "pass" : redirectHops <= 3 ? "warn" : "fail",
+        redirectHops === 0 ? "No redirects" : `${redirectHops} redirect${redirectHops > 1 ? "s" : ""} before landing${redirectHops > 3 ? " — long chains look like cloaking" : ""}`);
+
+      // meta refresh (deceptive auto-redirect)
+      const metaRefresh = /<meta[^>]+http-equiv=["']?refresh["']?[^>]+content=["'][^"']*url=/i.test(html);
+      add("meta-refresh", "No sneaky meta-refresh redirect", metaRefresh ? "warn" : "pass",
+        metaRefresh ? "A <meta refresh> redirect was found — auto-redirects can be flagged as deceptive" : "No meta-refresh redirect");
+
+      // mixed / insecure content on an https page
+      const mixed = secure && /(?:src|href)=["']http:\/\//i.test(html) ? (html.match(/(?:src|href)=["']http:\/\//gi) || []).length : 0;
+      add("mixed-content", "No insecure (mixed) content", mixed === 0 ? "pass" : "warn",
+        mixed === 0 ? "All resources load over https" : `${mixed} resource(s) load over http:// on an https page — browsers block them and it hurts trust`);
+
+      // crawlable: <meta robots noindex> means Google can't use the page
+      const noindex = /<meta[^>]+name=["']robots["'][^>]+content=["'][^"']*noindex/i.test(html);
+      add("indexable", "Page is indexable (no 'noindex')", noindex ? "fail" : "pass",
+        noindex ? "Page has <meta robots noindex> — Google won't review or rank a blocked destination" : "No noindex directive");
+
+      // language + charset (localisation signals Google checks)
+      const hasLang = /<html[^>]+lang=/i.test(html);
+      const hasCharset = /<meta[^>]+charset=/i.test(html);
+      add("locale", "Declares language & charset", hasLang && hasCharset ? "pass" : "warn",
+        `${hasLang ? "lang set" : "no lang attribute"}, ${hasCharset ? "charset set" : "no charset"} — helps Google match the ad's locale`);
+
+      // meta description
+      const metaDesc = /<meta[^>]+name=["']description["'][^>]+content=["']([^"']{1,})/i.exec(html)?.[1];
+      add("meta-description", "Has a meta description", metaDesc ? "pass" : "warn",
+        metaDesc ? `"${metaDesc.slice(0, 70)}"` : "No meta description — weaker quality signal");
+
+      // soft 404 / error text on a 200 page
+      const soft404 = /\b(404|page not found|page doesn'?t exist|nothing here|error 404)\b/i.test(text) && words < 200;
+      add("soft-404", "Not a soft error page", soft404 ? "fail" : "pass",
+        soft404 ? "Page returns 200 but reads like a 'not found'/error page — treated as a broken destination" : "Real page, not an error");
+
+      // business trust: phone or postal-address signal
+      const phone = /(?:tel:|(?:\+?\d[\d\s().-]{7,}\d))/.test(text);
+      const address = /\b\d{5,6}\b|street|road|\bst\.|avenue|\bave\b|suite|floor|p\.?o\.? box|pincode|zip/i.test(text);
+      add("business-info", "Business/contact details visible", phone || address ? "pass" : "warn",
+        phone || address ? `${phone ? "phone" : ""}${phone && address ? " + " : ""}${address ? "address" : ""} found` : "No phone or address on the page — Google favours verifiable businesses");
+
+      // ad density (ad-heavy pages get disapproved)
+      const adUnits = (lower.match(/adsbygoogle|data-ad-client|<ins[^>]+adsbygoogle/g) || []).length;
+      const iframes = (lower.match(/<iframe/g) || []).length;
+      add("ad-density", "Not overloaded with ads", adUnits <= 3 && iframes <= 6 ? "pass" : "warn",
+        `${adUnits} AdSense unit(s), ${iframes} iframe(s)${adUnits > 3 || iframes > 6 ? " — too many ads vs content can be disapproved" : " — reasonable"}`);
+
+      // placeholder / lorem-ipsum content
+      const placeholder = /lorem ipsum|dolor sit amet|your text here|sample text|placeholder/i.test(text);
+      add("placeholder", "No placeholder / dummy text", placeholder ? "warn" : "pass",
+        placeholder ? "Found lorem-ipsum / placeholder text — looks unfinished" : "No placeholder text");
+
+      // forced-download / risky file links
+      const download = /<a[^>]+download|href=["'][^"']*\.(exe|apk|dmg|msi|zip|rar)["']/i.test(html);
+      add("download", "No forced downloads", download ? "warn" : "pass",
+        download ? "Links that download executables/archives were found — auto-downloads violate policy" : "No forced-download links");
+
+      // obfuscated / risky scripts (malware-ish heuristic)
+      const obf = (lower.match(/eval\(|document\.write\(|atob\(|unescape\(|fromcharcode/g) || []).length;
+      add("scripts", "No obfuscated / risky scripts", obf <= 2 ? "pass" : "warn",
+        obf <= 2 ? "No suspicious script patterns" : `${obf} obfuscation patterns (eval/atob/document.write…) — can trip malware/cloaking checks`);
+
+      // prohibited-content keywords → REVIEW (heuristic, high false-positive, never auto-fail)
+      const riskTerms = ["replica", "counterfeit", "get rich quick", "guaranteed income", "miracle cure", "lose weight fast", "casino", "gambling", "payday loan", "essay writing", "hack ", "crack download", "buy followers"];
+      const hits = riskTerms.filter((t) => lower.includes(t));
+      add("prohibited", "No obvious prohibited-content terms", hits.length === 0 ? "pass" : "warn",
+        hits.length === 0 ? "No high-risk terms detected" : `Review these terms Google may restrict: ${hits.slice(0, 5).join(", ")} (heuristic — check the actual context/policy)`);
     } else if (checks[0]?.status === "pass") {
       add("content", "Enough original content", "warn", "Page loaded but returned no readable HTML");
+    }
+
+    // robots.txt: is the whole site blocked from crawlers? (Google can't review it)
+    try {
+      const base = new URL(finalUrl || `https://${domain}/`);
+      const rob = await fetch(`${base.origin}/robots.txt`, {
+        headers: { "User-Agent": "Mozilla/5.0 (compatible; PushVault-AdsCheck/1.0)" },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (rob.ok) {
+        const txt = (await rob.text()).toLowerCase();
+        const blocksAll = /user-agent:\s*\*[\s\S]*?disallow:\s*\/\s*(\n|$)/.test(txt) &&
+          !/allow:\s*\//.test(txt);
+        add("robots", "Crawlers not fully blocked (robots.txt)", blocksAll ? "fail" : "pass",
+          blocksAll ? "robots.txt disallows the whole site — Google can't crawl/review your destination" : "robots.txt allows crawling");
+      }
+    } catch {
+      /* no robots.txt or unreachable — not a failure */
     }
 
     const fails = checks.filter((c) => c.status === "fail").length;
