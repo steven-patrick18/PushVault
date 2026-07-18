@@ -547,6 +547,7 @@ export default function PropertyDetail() {
         <h3>3 · Prompt designer — how the popup generates &amp; looks</h3>
         <div style={{ display: "flex", gap: 28, flexWrap: "wrap" }}>
           <div style={{ flex: 1, minWidth: 300 }}>
+            <div className="dg-group">Content &amp; message</div>
             <label>When does it appear? (trigger)</label>
             <div style={{ display: "flex", gap: 8 }}>
               <select
@@ -645,6 +646,7 @@ export default function PropertyDetail() {
               </div>
             </div>
 
+            <div className="dg-group">Type, position &amp; size</div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <div style={{ width: 190 }}>
                 <label>Popup type</label>
@@ -716,6 +718,7 @@ export default function PropertyDetail() {
               </div>
             )}
 
+            <div className="dg-group">Layout &amp; alignment</div>
             {/* content placement — where the logo, text and buttons sit */}
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginTop: 4 }}>
               <div style={{ width: 170 }}>
@@ -747,6 +750,7 @@ export default function PropertyDetail() {
               </div>
             </div>
 
+            <div className="dg-group">Look &amp; colours</div>
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginTop: 4 }}>
               <div style={{ width: 170 }}>
                 <label>Size scale — {bannerScale.toFixed(2)}×</label>
@@ -799,6 +803,7 @@ export default function PropertyDetail() {
               </div>
             </div>
 
+            <div className="dg-group">Icon, buttons &amp; behaviour</div>
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginTop: 4 }}>
               <div style={{ width: 110 }}>
                 <label>Icon (emoji)</label>
@@ -872,6 +877,7 @@ export default function PropertyDetail() {
               Auto-close 0 = stays until the visitor acts. Icon blank = no icon. These apply on the live site (the mini preview shows the main look).
             </div>
 
+            <div className="dg-group">Logo</div>
             <label>Logo (optional — replaces the icon)</label>
             <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
               {cfg.style.logo && (
@@ -925,6 +931,7 @@ export default function PropertyDetail() {
               onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, logo: e.target.value || null } })}
             />
 
+            <div className="dg-group">Re-ask after "No"</div>
             <label>Re-ask after "No"</label>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <select
@@ -1322,7 +1329,7 @@ export default function PropertyDetail() {
       {/* ---- pop-under ---- */}
       <div className="panel">
         <div className="flex-between">
-          <h3>🪟 Pop-under (advanced)</h3>
+          <h3>4 · 🪟 Pop-under (advanced)</h3>
           <label style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 400 }}>
             <input type="checkbox" checked={cfg.popunder?.enabled === true}
               onChange={(e) => setCfg({ ...cfg, popunder: { ...cfg.popunder, enabled: e.target.checked } })} />
@@ -1375,7 +1382,7 @@ export default function PropertyDetail() {
 
       {/* ---- 4. frequency caps ---- */}
       <div className="panel">
-        <h3>4 · Frequency caps</h3>
+        <h3>5 · Frequency caps</h3>
         <div style={{ display: "flex", gap: 12, alignItems: "flex-end" }}>
           <div>
             <label>Max pushes / day</label>
@@ -1428,7 +1435,7 @@ export default function PropertyDetail() {
       </div>
 
       <div className="panel">
-        <h3>📞 Click-to-call branding (optional)</h3>
+        <h3>6 · 📞 Click-to-call branding (optional)</h3>
         <div className="page-sub">
           When a campaign uses click-to-call, tapping the notification opens a tiny "Connecting your
           call…" bridge page that launches the phone dialer (needed for iPhone — Apple blocks dialing
@@ -1470,7 +1477,7 @@ export default function PropertyDetail() {
 
       <div className="panel">
         <div className="flex-between">
-          <h3>6 · Google Ads — get traffic on this website</h3>
+          <h3>7 · Google Ads — get traffic on this website</h3>
           {adsConnected !== null && (
             <span className={"badge " + (adsConnected ? "green" : "gray")}>
               {adsConnected ? "API connected" : "API not connected"}

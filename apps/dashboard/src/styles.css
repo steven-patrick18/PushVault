@@ -241,3 +241,7 @@ label { display: block; font-size: 12px; color: var(--text-dim); margin: 14px 0 
 /* update-in-progress spinner (Updates page) */
 .spin { width: 22px; height: 22px; border: 3px solid var(--border, #2a2a38); border-top-color: var(--accent); border-radius: 50%; animation: pv-spin 0.7s linear infinite; flex-shrink: 0; }
 @keyframes pv-spin { to { transform: rotate(360deg); } }
+
+/* prompt-designer section groups */
+.dg-group { margin: 24px 0 12px; padding-top: 14px; border-top: 1px solid var(--border, #2a2a38); font-size: 12px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase; color: var(--text-dim, #8a8a98); }
+.dg-group:first-child { margin-top: 0; padding-top: 0; border-top: none; }
