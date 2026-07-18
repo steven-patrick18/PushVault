@@ -29,7 +29,7 @@ interface PromptConfig {
     toastCorner?: "bottom-right" | "bottom-left" | "top-right" | "top-left";
     layout?: "row" | "stack";
     align?: "start" | "center" | "end";
-    logoPos?: "start" | "end";
+    logoPos?: "start" | "end" | "top" | "bottom";
     minHeight?: number;
     yesAction?: "subscribe" | "call";
   };
@@ -665,6 +665,27 @@ export default function PropertyDetail() {
               </div>
             </div>
 
+            {cfg.style.position === "float" && (
+              <div style={{ marginTop: 6 }}>
+                <label>Quick position</label>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {([
+                    ["Top left", 6, 8], ["Top center", 50, 8], ["Top right", 94, 8],
+                    ["Center", 50, 50],
+                    ["Bottom left", 6, 92], ["Bottom center", 50, 92], ["Bottom right", 94, 92],
+                  ] as const).map(([label, x, y]) => {
+                    const active = (cfg.style.x ?? 50) === x && (cfg.style.y ?? 50) === y;
+                    return (
+                      <button key={label} type="button" className={"btn small " + (active ? "" : "secondary")}
+                        onClick={() => setCfg({ ...cfg, style: { ...cfg.style, x, y } })}>
+                        {label}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
             {/* content placement — where the logo, text and buttons sit */}
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginTop: 4 }}>
               <div style={{ width: 170 }}>
@@ -684,16 +705,16 @@ export default function PropertyDetail() {
                   <option value="end">Right</option>
                 </select>
               </div>
-              {cfg.style.layout !== "stack" && (
-                <div style={{ width: 150 }}>
-                  <label>Logo position</label>
-                  <select value={cfg.style.logoPos ?? "start"}
-                    onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, logoPos: e.target.value as any } })}>
-                    <option value="start">Before the text</option>
-                    <option value="end">After the text</option>
-                  </select>
-                </div>
-              )}
+              <div style={{ width: 200 }}>
+                <label>Logo position</label>
+                <select value={cfg.style.logoPos ?? "start"}
+                  onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, logoPos: e.target.value as any } })}>
+                  <option value="start">Inline — before the text</option>
+                  <option value="end">Inline — after the text</option>
+                  <option value="top">Banner — top / header (full width)</option>
+                  <option value="bottom">Banner — bottom / footer (full width)</option>
+                </select>
+              </div>
             </div>
 
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginTop: 4 }}>
@@ -953,11 +974,17 @@ export default function PropertyDetail() {
                 const noBorder = dark ? "#4a4b55" : "#ddd";
                 const btnRadius = Math.max(3, Math.round(radius * 0.6));
                 // content placement
-                const stack = cfg.style.layout === "stack";
+                const logoBanner = !!cfg.style.logo && (cfg.style.logoPos === "top" || cfg.style.logoPos === "bottom");
+                const bannerTop = cfg.style.logoPos === "top";
+                const stack = cfg.style.layout === "stack" || logoBanner;
                 const alignFlex = cfg.style.align === "center" ? "center" : cfg.style.align === "end" ? "flex-end" : "flex-start";
                 const alignText = cfg.style.align === "center" ? "center" : cfg.style.align === "end" ? "right" : "left";
                 const logoEnd = cfg.style.logoPos === "end";
                 const minH = Math.max(0, cfg.style.minHeight ?? 0);
+                const bandBg = dark ? "#2a2b36" : "#f2f2f7";
+                const logoBand = logoBanner ? (
+                  <img src={cfg.style.logo!} style={{ width: `calc(100% + ${24 * s}px)`, margin: `${bannerTop ? `${-8 * s}px ${-12 * s}px ${4 * s}px` : `${4 * s}px ${-12 * s}px ${-8 * s}px`} ${-12 * s}px`, height: 34 * s, objectFit: "contain", background: bandBg, borderRadius: bannerTop ? `${radius}px ${radius}px 0 0` : `0 0 ${radius}px ${radius}px`, padding: 4 * s, order: bannerTop ? -1 : 9 }} />
+                ) : null;
                 // drag the corner handle to resize BOTH width (X) and height (Y)
                 const startResize = (e: React.MouseEvent) => {
                   e.preventDefault();
@@ -1009,12 +1036,16 @@ export default function PropertyDetail() {
                       padding: `${9 * s}px ${12 * s}px`,
                       boxShadow: shadowCss,
                       fontSize: 11.5 * s,
+                      overflow: "hidden",
                       zIndex: 5,
                     }}
                   >
-                    {cfg.style.logo
-                      ? <img src={cfg.style.logo} style={{ width: 20 * s, height: 20 * s, borderRadius: 5, objectFit: "cover", order: logoEnd && !stack ? 9 : 0 }} />
-                      : (cfg.style.icon ?? "🔔") ? <span style={{ fontSize: 16 * s, order: logoEnd && !stack ? 9 : 0 }}>{cfg.style.icon ?? "🔔"}</span> : null}
+                    {logoBand}
+                    {logoBanner
+                      ? null
+                      : cfg.style.logo
+                        ? <img src={cfg.style.logo} style={{ width: 20 * s, height: 20 * s, borderRadius: 5, objectFit: "cover", order: logoEnd && !stack ? 9 : 0 }} />
+                        : (cfg.style.icon ?? "🔔") ? <span style={{ fontSize: 16 * s, order: logoEnd && !stack ? 9 : 0 }}>{cfg.style.icon ?? "🔔"}</span> : null}
                     <span style={{ flex: stack ? undefined : 1, minWidth: 80, display: "flex", flexDirection: "column", gap: 1, alignItems: stack ? alignFlex : "flex-start" }}>
                       <span style={{ fontWeight: 600 }}>{cfg.text.headline || "Get notified?"}</span>
                       {cfg.text.sub && <span style={{ fontSize: 10 * s, opacity: 0.7 }}>{cfg.text.sub}</span>}

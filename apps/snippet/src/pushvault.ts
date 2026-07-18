@@ -36,7 +36,7 @@ interface PromptConfig {
     toastCorner?: "bottom-right" | "bottom-left" | "top-right" | "top-left";
     layout?: "row" | "stack"; // content flow: inline row vs stacked column
     align?: "start" | "center" | "end"; // content/text alignment
-    logoPos?: "start" | "end"; // (row) logo before or after the text
+    logoPos?: "start" | "end" | "top" | "bottom"; // inline before/after, or full-width header/footer banner
     minHeight?: number; // fixed min height px (0 = auto)
     yesAction?: "subscribe" | "call"; // what the primary button does
   };
@@ -508,6 +508,13 @@ interface RemoteConfig {
     const alignText = style.align === "center" ? "center" : style.align === "end" ? "right" : "left";
     const logoEnd = style.logoPos === "end";
     const minH = Math.max(0, Number(style.minHeight) || 0);
+    // logo used as a full-width header/footer banner strip
+    const logoBanner = !!style.logo && (style.logoPos === "top" || style.logoPos === "bottom");
+    const bannerTop = style.logoPos === "top";
+    const col = stack || logoBanner; // column layout when stacked or banner-logo
+    const bandBg = dark ? "#2a2b36" : "#f2f2f7";
+    const padV = Math.round(12 * scale);
+    const padH = Math.round(16 * scale);
 
     const host = document.createElement("div");
     host.id = "pushvault-prompt";
@@ -529,15 +536,26 @@ interface RemoteConfig {
       const vx = corner.indexOf("left") >= 0 ? "left:18px;" : "right:18px;";
       wrap.style.cssText = "position:absolute;" + vy + vx + "width:min(" + Math.min(maxWidth, 380) + "px,92vw);pointer-events:none;";
     }
+    const bannerImg = logoBanner ? '<img class="pv-band" src="' + style.logo + '" alt="">' : "";
+    const inlineMark = logoBanner
+      ? ""
+      : style.logo
+        ? '<img class="pv-logo" src="' + style.logo + '" alt="">'
+        : icon
+          ? '<span class="pv-ic">' + icon + "</span>"
+          : "";
     wrap.innerHTML =
       '<div class="pv-bar" role="dialog" aria-label="Notification opt-in">' +
-      (style.logo ? '<img class="pv-logo" src="' + style.logo + '" alt="">' : icon ? '<span class="pv-ic">' + icon + "</span>" : "") +
+      (logoBanner && bannerTop ? bannerImg : "") +
+      inlineMark +
       '<span class="pv-txt"><span class="pv-head"></span>' + (sub ? '<span class="pv-sub"></span>' : "") + "</span>" +
       '<span class="pv-actions">' +
       '<button class="pv-yes"></button>' +
       (showNo ? '<button class="pv-no"></button>' : "") +
       (showClose ? '<button class="pv-x" aria-label="Dismiss">&#10005;</button>' : "") +
-      "</span></div>";
+      "</span>" +
+      (logoBanner && !bannerTop ? bannerImg : "") +
+      "</div>";
     const noBg = dark ? "#34353f" : "#f5f5f7";
     const noColor = dark ? "#d5d5dd" : "#333";
     const noBorder = dark ? "#4a4b55" : "#ddd";
@@ -549,22 +567,27 @@ interface RemoteConfig {
             : "@keyframes pventer{from{opacity:0;transform:translateY(" + (mode === "top" ? "-14px" : "14px") + ")}to{opacity:1;transform:none}}.pv-bar{animation:pventer .25s ease-out}";
     const css = document.createElement("style");
     css.textContent =
-      ".pv-bar{pointer-events:auto;display:flex;" +
-      (stack
+      ".pv-bar{pointer-events:auto;display:flex;overflow:hidden;" +
+      (col
         ? "flex-direction:column;align-items:" + alignFlex + ";text-align:" + alignText + ";"
         : "align-items:center;flex-wrap:wrap;") +
       "gap:" + px(12) + ";" +
       (minH > 0 ? "min-height:" + minH + "px;" : "") +
       (mode === "float" || mode === "toast" ? "margin:0;" : "margin:8px auto;max-width:" + maxWidth + "px;") +
-      "padding:" + px(12) + " " + px(16) + ";border-radius:" + radius + "px;background:" + bg + ";color:" + textColor + ";" +
+      "padding:" + padV + "px " + padH + "px;border-radius:" + radius + "px;background:" + bg + ";color:" + textColor + ";" +
       "box-shadow:" + shadowCss + ";font:" + px(14) + "/1.4 system-ui,sans-serif;box-sizing:border-box;}" +
       (logoEnd ? ".pv-ic,.pv-logo{order:9}" : "") +
+      // full-width header/footer banner: bleed to the edges, neutral band
+      ".pv-band{align-self:stretch;width:calc(100% + " + 2 * padH + "px);margin:" +
+      (bannerTop ? "-" + padV + "px -" + padH + "px 0 -" + padH + "px" : "0 -" + padH + "px -" + padV + "px -" + padH + "px") +
+      ";height:" + Math.round(70 * scale) + "px;object-fit:contain;background:" + bandBg + ";padding:" + px(8) + ";box-sizing:border-box;" +
+      "border-radius:" + (bannerTop ? radius + "px " + radius + "px 0 0" : "0 0 " + radius + "px " + radius + "px") + "}" +
       ".pv-logo{width:" + px(28) + ";height:" + px(28) + ";border-radius:6px;object-fit:cover}" +
       ".pv-ic{font-size:" + px(22) + ";line-height:1}" +
-      ".pv-txt{" + (stack ? "" : "flex:1;") + "min-width:130px;display:flex;flex-direction:column;gap:2px;align-items:" + (stack ? alignFlex : "flex-start") + "}" +
+      ".pv-txt{" + (col ? "" : "flex:1;") + "min-width:130px;display:flex;flex-direction:column;gap:2px;align-items:" + (col ? alignFlex : "flex-start") + "}" +
       ".pv-head{font-weight:600}" +
       ".pv-sub{font-size:" + px(12) + ";opacity:.72;font-weight:400}" +
-      ".pv-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;" + (stack ? "width:100%;justify-content:" + alignFlex + ";" : "") + "}" +
+      ".pv-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;" + (col ? "width:100%;justify-content:" + alignFlex + ";" : "") + "}" +
       "button{cursor:pointer;border-radius:" + Math.max(4, Math.round(radius * 0.66)) + "px;font:600 " + px(13) + " system-ui,sans-serif;padding:" + px(8) + " " + px(14) + ";border:1px solid " + noBorder + ";background:" + noBg + ";color:" + noColor + "}" +
       (outline
         ? ".pv-yes{background:transparent;border:2px solid " + accent + ";color:" + accent + "}"
