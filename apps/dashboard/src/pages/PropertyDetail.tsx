@@ -5,7 +5,7 @@ import { api } from "../api";
 interface PromptConfig {
   trigger: { type: string; seconds?: number; percent?: number };
   pages: { include: string[]; exclude: string[] };
-  text: { headline: string; sub?: string; yes: string; no: string };
+  text: { headline: string; sub?: string; yes: string; no: string; callNumber?: string };
   style: {
     position: string;
     accent: string;
@@ -31,6 +31,7 @@ interface PromptConfig {
     align?: "start" | "center" | "end";
     logoPos?: "start" | "end";
     minHeight?: number;
+    yesAction?: "subscribe" | "call";
   };
   reask: {
     enabled: boolean;
@@ -579,10 +580,34 @@ export default function PropertyDetail() {
               placeholder="Allow notifications to get our latest offers and updates."
               onChange={(e) => setCfg({ ...cfg, text: { ...cfg.text, sub: e.target.value } })}
             />
+            <label>What does the main button do?</label>
+            <select
+              value={cfg.style.yesAction ?? "subscribe"}
+              onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, yesAction: e.target.value as any } })}
+            >
+              <option value="subscribe">Subscribe to notifications (push opt-in)</option>
+              <option value="call">📞 Call a phone number (dials on tap)</option>
+            </select>
+            {cfg.style.yesAction === "call" && (
+              <>
+                <label>Phone number to dial</label>
+                <input
+                  value={cfg.text.callNumber ?? ""}
+                  placeholder="+91 98765 43210"
+                  onChange={(e) => setCfg({ ...cfg, text: { ...cfg.text, callNumber: e.target.value } })}
+                />
+                <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 4 }}>
+                  Tapping the button opens the phone dialer with this number pre-filled — works on both
+                  Android and iPhone. Include the country code (e.g. +91…). This popup won't collect push
+                  subscribers in call mode.
+                </div>
+              </>
+            )}
             <div style={{ display: "flex", gap: 8 }}>
               <div style={{ flex: 1 }}>
-                <label>Yes button</label>
-                <input value={cfg.text.yes} onChange={(e) => setCfg({ ...cfg, text: { ...cfg.text, yes: e.target.value } })} />
+                <label>{cfg.style.yesAction === "call" ? "Call button label" : "Yes button"}</label>
+                <input value={cfg.text.yes} placeholder={cfg.style.yesAction === "call" ? "📞 Call now" : "Yes, notify me"}
+                  onChange={(e) => setCfg({ ...cfg, text: { ...cfg.text, yes: e.target.value } })} />
               </div>
               <div style={{ flex: 1 }}>
                 <label>No button</label>

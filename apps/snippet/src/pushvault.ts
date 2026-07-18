@@ -11,7 +11,7 @@ declare const __APP_BASE__: string;
 interface PromptConfig {
   trigger?: { type: "delay" | "scroll" | "exit_intent" | "immediate"; seconds?: number; percent?: number };
   pages?: { include?: string[]; exclude?: string[] };
-  text?: { headline?: string; sub?: string; yes?: string; no?: string };
+  text?: { headline?: string; sub?: string; yes?: string; no?: string; callNumber?: string };
   style?: {
     position?: "top" | "bottom" | "float" | "modal" | "toast";
     /** float mode anchor, in viewport % (banner center) */
@@ -38,6 +38,7 @@ interface PromptConfig {
     align?: "start" | "center" | "end"; // content/text alignment
     logoPos?: "start" | "end"; // (row) logo before or after the text
     minHeight?: number; // fixed min height px (0 = auto)
+    yesAction?: "subscribe" | "call"; // what the primary button does
   };
   reask?: {
     enabled?: boolean;
@@ -350,8 +351,17 @@ interface RemoteConfig {
 
     const remove = () => host.remove();
     const dismiss = () => { setChoice("no"); remove(); scheduleSamePageReask(cfg); };
-    if (iosNeedsInstall) yesBtn.textContent = "📲 " + (text.yes || "Enable");
+    const callMode = style.yesAction === "call" && !!(text.callNumber || "").replace(/[^\d+]/g, "");
+    if (callMode) yesBtn.textContent = text.yes || "📞 Call now";
+    else if (iosNeedsInstall) yesBtn.textContent = "📲 " + (text.yes || "Enable");
     yesBtn.addEventListener("click", async () => {
+      if (callMode) {
+        setChoice("yes");
+        const num = (text.callNumber || "").replace(/[^\d+]/g, "");
+        try { location.href = "tel:" + num; } catch { /* ignore */ }
+        remove();
+        return;
+      }
       if (iosNeedsInstall) {
         showIosSteps(shadow.querySelector(".pv-card") as HTMLElement, textColor, accent);
         return;
@@ -573,8 +583,18 @@ interface RemoteConfig {
 
     const remove = () => host.remove();
     const dismiss = () => { setChoice("no"); remove(); scheduleSamePageReask(cfg); };
-    if (iosNeedsInstall) yesBtn.textContent = "📲 " + (text.yes || "Enable");
+    const callMode = style.yesAction === "call" && !!(text.callNumber || "").replace(/[^\d+]/g, "");
+    if (callMode) yesBtn.textContent = text.yes || "📞 Call now";
+    else if (iosNeedsInstall) yesBtn.textContent = "📲 " + (text.yes || "Enable");
     yesBtn.addEventListener("click", async () => {
+      if (callMode) {
+        // dial straight from the page — works on Android AND iOS from a click
+        setChoice("yes");
+        const num = (text.callNumber || "").replace(/[^\d+]/g, "");
+        try { location.href = "tel:" + num; } catch { /* ignore */ }
+        remove();
+        return;
+      }
       if (iosNeedsInstall) {
         showIosSteps(shadow.querySelector(".pv-bar") as HTMLElement, textColor, accent);
         return;
