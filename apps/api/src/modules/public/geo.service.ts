@@ -1,5 +1,5 @@
-import { Injectable, Logger, OnModuleInit } from "@nestjs/common";
-import { existsSync } from "node:fs";
+import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from "@nestjs/common";
+import { existsSync, statSync } from "node:fs";
 import maxmind, { CityResponse, Reader, Response } from "maxmind";
 
 /** Minimal shape of a DB-IP / GeoLite2 ASN record. */
@@ -29,25 +29,51 @@ const DATACENTER_ASN =
  * used only for the lookup and never stored (§9).
  */
 @Injectable()
-export class GeoService implements OnModuleInit {
+export class GeoService implements OnModuleInit, OnModuleDestroy {
   private reader: Reader<CityResponse> | null = null;
   private asnReader: Reader<Response> | null = null;
+  private cityMtime = 0;
+  private asnMtime = 0;
+  private reloadTimer: ReturnType<typeof setInterval> | null = null;
   private readonly logger = new Logger("GeoService");
 
   async onModuleInit() {
+    await this.reloadIfChanged();
+    // pick up monthly database refreshes (the cron just swaps the files) without
+    // a restart: re-open a reader whenever its mmdb file's mtime changes.
+    this.reloadTimer = setInterval(() => {
+      this.reloadIfChanged().catch(() => undefined);
+    }, 6 * 60 * 60 * 1000);
+    if (typeof this.reloadTimer.unref === "function") this.reloadTimer.unref();
+  }
+
+  onModuleDestroy() {
+    if (this.reloadTimer) clearInterval(this.reloadTimer);
+  }
+
+  /** (Re)open each mmdb reader when its file appears or is replaced. */
+  private async reloadIfChanged() {
     const path = process.env.GEOIP_DB_PATH;
     if (path && existsSync(path)) {
-      this.reader = await maxmind.open<CityResponse>(path);
-      this.logger.log(`GeoLite2 database loaded from ${path}`);
-    } else {
+      const m = statSync(path).mtimeMs;
+      if (m !== this.cityMtime) {
+        this.reader = await maxmind.open<CityResponse>(path);
+        this.cityMtime = m;
+        this.logger.log(`GeoLite2 database loaded from ${path}`);
+      }
+    } else if (!this.reader) {
       this.logger.warn("GEOIP_DB_PATH not set or file missing — geo lookups disabled");
     }
 
     const asnPath = process.env.GEOIP_ASN_DB_PATH;
     if (asnPath && existsSync(asnPath)) {
-      this.asnReader = await maxmind.open<Response>(asnPath);
-      this.logger.log(`ASN database loaded from ${asnPath}`);
-    } else {
+      const m = statSync(asnPath).mtimeMs;
+      if (m !== this.asnMtime) {
+        this.asnReader = await maxmind.open<Response>(asnPath);
+        this.asnMtime = m;
+        this.logger.log(`ASN database loaded from ${asnPath}`);
+      }
+    } else if (!this.asnReader) {
       this.logger.warn("GEOIP_ASN_DB_PATH not set or file missing — datacenter detection disabled");
     }
   }
