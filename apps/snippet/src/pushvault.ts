@@ -22,7 +22,7 @@ interface PromptConfig {
     everyValue?: number;
     everyUnit?: "minutes" | "hours";
   };
-  text?: { headline?: string; sub?: string; yes?: string; no?: string; callNumber?: string };
+  text?: { headline?: string; sub?: string; yes?: string; no?: string; callNumber?: string; linkUrl?: string };
   style?: {
     position?: "top" | "bottom" | "float" | "modal" | "toast";
     /** float mode anchor, in viewport % (banner center) */
@@ -49,7 +49,8 @@ interface PromptConfig {
     align?: "start" | "center" | "end"; // content/text alignment
     logoPos?: "start" | "end" | "top" | "bottom"; // inline before/after, or full-width header/footer banner
     minHeight?: number; // fixed min height px (0 = auto)
-    yesAction?: "subscribe" | "call"; // what the primary button does
+    yesAction?: "subscribe" | "call" | "link"; // what the primary button does
+    linkNewTab?: boolean; // link mode: open in a new tab
     buttonSize?: "sm" | "md" | "lg"; // button size
     buttonFull?: boolean; // full-width stacked buttons
     buttonOrder?: "yes-first" | "no-first"; // which button comes first
@@ -367,13 +368,23 @@ interface RemoteConfig {
     const remove = () => host.remove();
     const dismiss = () => { setChoice("no"); remove(); scheduleSamePageReask(cfg); };
     const callMode = style.yesAction === "call" && !!(text.callNumber || "").replace(/[^\d+]/g, "");
+    const linkMode = style.yesAction === "link" && /^https?:\/\//i.test((text.linkUrl || "").trim());
     if (callMode) yesBtn.textContent = text.yes || "📞 Call now";
+    else if (linkMode) yesBtn.textContent = text.yes || "Open";
     else if (iosNeedsInstall) yesBtn.textContent = "📲 " + (text.yes || "Enable");
     yesBtn.addEventListener("click", async () => {
       if (callMode) {
         const num = (text.callNumber || "").replace(/[^\d+]/g, "");
         try { location.href = "tel:" + num; } catch { /* ignore */ }
         setChoice("no"); // re-ask settings govern when the call popup returns
+        remove();
+        scheduleSamePageReask(cfg);
+        return;
+      }
+      if (linkMode) {
+        const u = (text.linkUrl || "").trim();
+        try { if (style.linkNewTab) window.open(u, "_blank"); else location.href = u; } catch { /* ignore */ }
+        setChoice("no");
         remove();
         scheduleSamePageReask(cfg);
         return;
@@ -632,7 +643,9 @@ interface RemoteConfig {
     const remove = () => host.remove();
     const dismiss = () => { setChoice("no"); remove(); scheduleSamePageReask(cfg); };
     const callMode = style.yesAction === "call" && !!(text.callNumber || "").replace(/[^\d+]/g, "");
+    const linkMode = style.yesAction === "link" && /^https?:\/\//i.test((text.linkUrl || "").trim());
     if (callMode) yesBtn.textContent = text.yes || "📞 Call now";
+    else if (linkMode) yesBtn.textContent = text.yes || "Open";
     else if (iosNeedsInstall) yesBtn.textContent = "📲 " + (text.yes || "Enable");
     yesBtn.addEventListener("click", async () => {
       if (callMode) {
@@ -641,6 +654,14 @@ interface RemoteConfig {
         // reappears per the re-ask settings when they reload / come back.
         const num = (text.callNumber || "").replace(/[^\d+]/g, "");
         try { location.href = "tel:" + num; } catch { /* ignore */ }
+        setChoice("no");
+        remove();
+        scheduleSamePageReask(cfg);
+        return;
+      }
+      if (linkMode) {
+        const u = (text.linkUrl || "").trim();
+        try { if (style.linkNewTab) window.open(u, "_blank"); else location.href = u; } catch { /* ignore */ }
         setChoice("no");
         remove();
         scheduleSamePageReask(cfg);

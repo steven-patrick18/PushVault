@@ -5,7 +5,7 @@ import { api } from "../api";
 interface PromptConfig {
   trigger: { type: string; seconds?: number; percent?: number };
   pages: { include: string[]; exclude: string[] };
-  text: { headline: string; sub?: string; yes: string; no: string; callNumber?: string };
+  text: { headline: string; sub?: string; yes: string; no: string; callNumber?: string; linkUrl?: string };
   style: {
     position: string;
     accent: string;
@@ -31,7 +31,8 @@ interface PromptConfig {
     align?: "start" | "center" | "end";
     logoPos?: "start" | "end" | "top" | "bottom";
     minHeight?: number;
-    yesAction?: "subscribe" | "call";
+    yesAction?: "subscribe" | "call" | "link";
+    linkNewTab?: boolean;
     buttonSize?: "sm" | "md" | "lg";
     buttonFull?: boolean;
     buttonOrder?: "yes-first" | "no-first";
@@ -596,7 +597,27 @@ export default function PropertyDetail() {
             >
               <option value="subscribe">Subscribe to notifications (push opt-in)</option>
               <option value="call">📞 Call a phone number (dials on tap)</option>
+              <option value="link">🔗 Open a link / URL (redirects on tap)</option>
             </select>
+            {cfg.style.yesAction === "link" && (
+              <>
+                <label>URL to open</label>
+                <input
+                  value={cfg.text.linkUrl ?? ""}
+                  placeholder="https://example.com/offer"
+                  onChange={(e) => setCfg({ ...cfg, text: { ...cfg.text, linkUrl: e.target.value } })}
+                />
+                <label style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 400, marginTop: 6 }}>
+                  <input type="checkbox" checked={cfg.style.linkNewTab === true}
+                    onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, linkNewTab: e.target.checked } })} />
+                  Open in a new tab
+                </label>
+                <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 4 }}>
+                  Tapping the button sends the visitor to this URL (same tab, or a new tab if checked). Must start
+                  with http:// or https://. In link mode this popup doesn't collect push subscribers.
+                </div>
+              </>
+            )}
             {cfg.style.yesAction === "call" && (
               <>
                 <label>Phone number to dial</label>
@@ -614,8 +635,8 @@ export default function PropertyDetail() {
             )}
             <div style={{ display: "flex", gap: 8 }}>
               <div style={{ flex: 1 }}>
-                <label>{cfg.style.yesAction === "call" ? "Call button label" : "Yes button"}</label>
-                <input value={cfg.text.yes} placeholder={cfg.style.yesAction === "call" ? "📞 Call now" : "Yes, notify me"}
+                <label>{cfg.style.yesAction === "call" ? "Call button label" : cfg.style.yesAction === "link" ? "Link button label" : "Yes button"}</label>
+                <input value={cfg.text.yes} placeholder={cfg.style.yesAction === "call" ? "📞 Call now" : cfg.style.yesAction === "link" ? "Open" : "Yes, notify me"}
                   onChange={(e) => setCfg({ ...cfg, text: { ...cfg.text, yes: e.target.value } })} />
               </div>
               <div style={{ flex: 1 }}>
