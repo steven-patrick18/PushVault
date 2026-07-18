@@ -11,6 +11,10 @@ declare const __APP_BASE__: string;
 interface PromptConfig {
   trigger?: { type: "delay" | "scroll" | "exit_intent" | "immediate"; seconds?: number; percent?: number };
   pages?: { include?: string[]; exclude?: string[] };
+  // pop-under: after `delaySeconds`, the NEXT click opens `url` in a background
+  // tab (browsers block auto-popups, so it must ride a user click), at most once
+  // per `everyHours`.
+  popunder?: { enabled?: boolean; url?: string; delaySeconds?: number; everyHours?: number };
   text?: { headline?: string; sub?: string; yes?: string; no?: string; callNumber?: string };
   style?: {
     position?: "top" | "bottom" | "float" | "modal" | "toast";
@@ -813,9 +817,48 @@ interface RemoteConfig {
   };
   (window as any).PushVault = PushVault;
 
+  // Pop-under: after a delay, the visitor's next click opens a URL in a
+  // background tab. Runs independently of the opt-in prompt. Browsers only
+  // allow window.open on a user gesture, so we ride the first click; a
+  // per-`everyHours` cap in localStorage stops it nagging.
+  async function initPopunder() {
+    if ((window as any).__PV_NO_PROMPT) return;
+    const cfg = await fetchConfig();
+    const pu = cfg?.prompt_config?.popunder;
+    if (!pu || !pu.enabled) return;
+    const url = String(pu.url || "").trim();
+    if (!/^https?:\/\//i.test(url)) return; // only http(s)
+    if (!pageMatches(cfg!.prompt_config?.pages)) return;
+    const key = "pv_pu_" + propertyKey;
+    const everyMs = Math.max(0, pu.everyHours ?? 12) * 3600_000;
+    try {
+      const last = Number(localStorage.getItem(key) || 0);
+      if (everyMs && Date.now() - last < everyMs) return;
+    } catch {
+      /* ignore */
+    }
+    const arm = () => {
+      const onClick = () => {
+        document.removeEventListener("click", onClick, true);
+        try {
+          const w = window.open(url, "_blank");
+          if (w) { w.blur(); window.focus(); } // best-effort keep this tab in front
+          localStorage.setItem(key, String(Date.now()));
+        } catch {
+          /* popup blocked */
+        }
+      };
+      document.addEventListener("click", onClick, true);
+    };
+    const delay = Math.max(0, pu.delaySeconds ?? 0) * 1000;
+    if (delay) setTimeout(arm, delay);
+    else arm();
+  }
+
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", () => void init());
+    document.addEventListener("DOMContentLoaded", () => { void init(); void initPopunder(); });
   } else {
     void init();
+    void initPopunder();
   }
 })();

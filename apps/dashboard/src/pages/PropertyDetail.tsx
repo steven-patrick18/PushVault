@@ -36,6 +36,7 @@ interface PromptConfig {
     buttonFull?: boolean;
     buttonOrder?: "yes-first" | "no-first";
   };
+  popunder?: { enabled?: boolean; url?: string; delaySeconds?: number; everyHours?: number };
   reask: {
     enabled: boolean;
     cooldown_days?: number; // legacy
@@ -99,6 +100,7 @@ const DEFAULT_CFG: PromptConfig = {
     buttonFull: false,
     buttonOrder: "yes-first",
   },
+  popunder: { enabled: false, url: "", delaySeconds: 5, everyHours: 12 },
   reask: { enabled: false, cooldown_value: 7, cooldown_unit: "days" },
 };
 
@@ -229,6 +231,7 @@ export default function PropertyDetail() {
         pages: { ...DEFAULT_CFG.pages, ...p.promptConfig?.pages },
         text: { ...DEFAULT_CFG.text, ...p.promptConfig?.text },
         style: { ...DEFAULT_CFG.style, ...p.promptConfig?.style },
+        popunder: { ...DEFAULT_CFG.popunder, ...p.promptConfig?.popunder },
         reask: {
           ...DEFAULT_CFG.reask,
           ...p.promptConfig?.reask,
@@ -1293,6 +1296,52 @@ export default function PropertyDetail() {
             </div>
           </div>
         </div>
+      </div>
+
+      {/* ---- pop-under ---- */}
+      <div className="panel">
+        <div className="flex-between">
+          <h3>🪟 Pop-under (advanced)</h3>
+          <label style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 400 }}>
+            <input type="checkbox" checked={cfg.popunder?.enabled === true}
+              onChange={(e) => setCfg({ ...cfg, popunder: { ...cfg.popunder, enabled: e.target.checked } })} />
+            Enable
+          </label>
+        </div>
+        <div className="page-sub">
+          Opens a URL in a background tab. Because browsers block auto-popups, it arms after your delay
+          and fires on the visitor's <b>next click anywhere on the page</b>, at most once per the frequency below.
+        </div>
+        {cfg.popunder?.enabled && (
+          <>
+            <label>URL to open</label>
+            <input
+              value={cfg.popunder?.url ?? ""}
+              placeholder="https://example.com/offer"
+              onChange={(e) => setCfg({ ...cfg, popunder: { ...cfg.popunder, url: e.target.value } })}
+            />
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginTop: 8 }}>
+              <div style={{ width: 160 }}>
+                <label>Arm after (seconds)</label>
+                <input type="number" min={0} value={cfg.popunder?.delaySeconds ?? 5}
+                  onChange={(e) => setCfg({ ...cfg, popunder: { ...cfg.popunder, delaySeconds: Math.max(0, Number(e.target.value)) } })} />
+              </div>
+              <div style={{ width: 190 }}>
+                <label>Show at most once every (hours)</label>
+                <input type="number" min={0} value={cfg.popunder?.everyHours ?? 12}
+                  onChange={(e) => setCfg({ ...cfg, popunder: { ...cfg.popunder, everyHours: Math.max(0, Number(e.target.value)) } })} />
+              </div>
+            </div>
+          </>
+        )}
+        <div style={{ background: "#3a2a12", border: "1px solid #6a5220", borderRadius: 8, padding: "10px 12px", fontSize: 12, color: "#e8c98a", marginTop: 12 }}>
+          ⚠️ <b>Use with care.</b> Pop-unders violate <b>Google AdSense</b> policy — never enable this on a
+          page running AdSense (risk of account ban). They can also annoy visitors and hurt SEO. Only use a
+          URL you own/authorise. Best for direct-sold ad deals on sites without AdSense.
+        </div>
+        <button className="btn" style={{ marginTop: 14 }} disabled={saving} onClick={() => saveConfig()}>
+          {saving ? "Saving…" : "Save pop-under"}
+        </button>
       </div>
 
       {/* ---- 4. frequency caps ---- */}
