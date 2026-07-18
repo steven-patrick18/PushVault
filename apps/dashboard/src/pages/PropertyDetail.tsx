@@ -792,6 +792,23 @@ export default function PropertyDetail() {
                 const noColor = dark ? "#d5d5dd" : "#333";
                 const noBorder = dark ? "#4a4b55" : "#ddd";
                 const btnRadius = Math.max(3, Math.round(radius * 0.6));
+                // drag the corner handle to resize the banner width live
+                const startResize = (e: React.MouseEvent) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  const startX = e.clientX;
+                  const startW = cfg.style.width ?? 460;
+                  const move = (ev: MouseEvent) => {
+                    const deltaCfg = ((ev.clientX - startX) / widthFactor) * 2;
+                    setCfg((c) => ({ ...c, style: { ...c.style, width: clamp(Math.round(startW + deltaCfg), 220, 900) } }));
+                  };
+                  const up = () => {
+                    window.removeEventListener("mousemove", move);
+                    window.removeEventListener("mouseup", up);
+                  };
+                  window.addEventListener("mousemove", move);
+                  window.addEventListener("mouseup", up);
+                };
                 return (
                   <div
                     onMouseDown={startBannerDrag}
@@ -835,6 +852,24 @@ export default function PropertyDetail() {
                       )}
                       {cfg.style.closeButton !== false && <span style={{ color: "#999", padding: `${5 * s}px 3px` }}>✕</span>}
                     </span>
+                    {/* drag-to-resize handle (bottom-right corner) */}
+                    <div
+                      onMouseDown={startResize}
+                      title="Drag to resize width"
+                      style={{
+                        position: "absolute",
+                        right: -5,
+                        bottom: -5,
+                        width: 14,
+                        height: 14,
+                        borderRadius: 4,
+                        background: cfg.style.accent,
+                        border: "2px solid #fff",
+                        boxShadow: "0 1px 4px rgba(0,0,0,.4)",
+                        cursor: "ew-resize",
+                        zIndex: 12,
+                      }}
+                    />
                   </div>
                 );
               };
@@ -995,8 +1030,8 @@ export default function PropertyDetail() {
             })()}
 
             <div className="preview-note" style={{ maxWidth: "100%", textAlign: "center" }}>
-              ✋ <b>Drag the banner anywhere</b> — the middle floats it exactly there, near the top/bottom edge
-              makes it a bar. Chips: ▲ ◎ ▼ place, A− A+ resize.
+              ✋ <b>Drag the banner</b> to move it; drag the <b>colored corner handle</b> to resize its width
+              ({cfg.style.width ?? 460}px). Chips: ▲ ◎ ▼ place, A− A+ scale.
               Appears{" "}
               {cfg.trigger.type === "delay"
                 ? `${cfg.trigger.seconds ?? 12}s after page load`
