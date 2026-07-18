@@ -39,6 +39,9 @@ interface PromptConfig {
     logoPos?: "start" | "end" | "top" | "bottom"; // inline before/after, or full-width header/footer banner
     minHeight?: number; // fixed min height px (0 = auto)
     yesAction?: "subscribe" | "call"; // what the primary button does
+    buttonSize?: "sm" | "md" | "lg"; // button size
+    buttonFull?: boolean; // full-width stacked buttons
+    buttonOrder?: "yes-first" | "no-first"; // which button comes first
   };
   reask?: {
     enabled?: boolean;
@@ -300,6 +303,7 @@ interface RemoteConfig {
     const showClose = style.closeButton !== false;
     const showNo = style.showNo !== false;
     const outline = style.buttonStyle === "outline";
+    const bf = style.buttonSize === "sm" ? 0.82 : style.buttonSize === "lg" ? 1.24 : 1;
 
     const host = document.createElement("div");
     host.id = "pushvault-prompt";
@@ -331,8 +335,8 @@ interface RemoteConfig {
       ".pv-head{font-size:21px;font-weight:700;line-height:1.3;margin-bottom:8px}" +
       ".pv-sub{font-size:14px;color:" + subColor + ";line-height:1.5;margin-bottom:22px}" +
       (outline
-        ? ".pv-yes{width:100%;background:transparent;color:" + accent + ";border:2px solid " + accent + ";border-radius:12px;padding:14px;font-size:16px;font-weight:700;cursor:pointer}"
-        : ".pv-yes{width:100%;background:" + accent + ";color:#fff;border:none;border-radius:12px;padding:15px;font-size:16px;font-weight:700;cursor:pointer}") +
+        ? ".pv-yes{width:100%;background:transparent;color:" + accent + ";border:2px solid " + accent + ";border-radius:12px;padding:" + Math.round(14 * bf) + "px;font-size:" + Math.round(16 * bf) + "px;font-weight:700;cursor:pointer}"
+        : ".pv-yes{width:100%;background:" + accent + ";color:#fff;border:none;border-radius:12px;padding:" + Math.round(15 * bf) + "px;font-size:" + Math.round(16 * bf) + "px;font-weight:700;cursor:pointer}") +
       ".pv-no{width:100%;background:none;border:none;color:" + subColor + ";font-size:13px;" +
       "padding:12px 0 0;cursor:pointer}" +
       ".pv-x{position:absolute;top:12px;right:14px;background:none;border:none;color:" + subColor +
@@ -515,6 +519,9 @@ interface RemoteConfig {
     const bandBg = dark ? "#2a2b36" : "#f2f2f7";
     const padV = Math.round(12 * scale);
     const padH = Math.round(16 * scale);
+    const bf = style.buttonSize === "sm" ? 0.82 : style.buttonSize === "lg" ? 1.24 : 1; // button size factor
+    const btnFull = style.buttonFull === true;
+    const noFirst = style.buttonOrder === "no-first";
 
     const host = document.createElement("div");
     host.id = "pushvault-prompt";
@@ -587,8 +594,14 @@ interface RemoteConfig {
       ".pv-txt{" + (col ? "" : "flex:1;") + "min-width:130px;display:flex;flex-direction:column;gap:2px;align-items:" + (col ? alignFlex : "flex-start") + "}" +
       ".pv-head{font-weight:600}" +
       ".pv-sub{font-size:" + px(12) + ";opacity:.72;font-weight:400}" +
-      ".pv-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;" + (col ? "width:100%;justify-content:" + alignFlex + ";" : "") + "}" +
-      "button{cursor:pointer;border-radius:" + Math.max(4, Math.round(radius * 0.66)) + "px;font:600 " + px(13) + " system-ui,sans-serif;padding:" + px(8) + " " + px(14) + ";border:1px solid " + noBorder + ";background:" + noBg + ";color:" + noColor + "}" +
+      ".pv-actions{display:flex;gap:8px;" +
+      (btnFull
+        ? "flex-direction:column;align-items:stretch;width:100%;"
+        : "align-items:center;flex-wrap:wrap;" + (col ? "width:100%;justify-content:" + alignFlex + ";" : "")) +
+      "}" +
+      "button{cursor:pointer;border-radius:" + Math.max(4, Math.round(radius * 0.66)) + "px;font:600 " + px(13 * bf) + " system-ui,sans-serif;padding:" + px(8 * bf) + " " + px(14 * bf) + ";border:1px solid " + noBorder + ";background:" + noBg + ";color:" + noColor + "}" +
+      (btnFull ? ".pv-yes,.pv-no{width:100%;text-align:center}" : "") +
+      (noFirst ? ".pv-yes{order:2}.pv-no{order:1}" : "") +
       (outline
         ? ".pv-yes{background:transparent;border:2px solid " + accent + ";color:" + accent + "}"
         : ".pv-yes{background:" + accent + ";border-color:" + accent + ";color:#fff}") +

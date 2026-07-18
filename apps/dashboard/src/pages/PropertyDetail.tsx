@@ -32,6 +32,9 @@ interface PromptConfig {
     logoPos?: "start" | "end" | "top" | "bottom";
     minHeight?: number;
     yesAction?: "subscribe" | "call";
+    buttonSize?: "sm" | "md" | "lg";
+    buttonFull?: boolean;
+    buttonOrder?: "yes-first" | "no-first";
   };
   reask: {
     enabled: boolean;
@@ -92,6 +95,9 @@ const DEFAULT_CFG: PromptConfig = {
     align: "start",
     logoPos: "start",
     minHeight: 0,
+    buttonSize: "md",
+    buttonFull: false,
+    buttonOrder: "yes-first",
   },
   reask: { enabled: false, cooldown_value: 7, cooldown_unit: "days" },
 };
@@ -800,6 +806,32 @@ export default function PropertyDetail() {
                   onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, autoClose: Math.max(0, Number(e.target.value)) } })} />
               </div>
             </div>
+
+            {/* button size + arrangement */}
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginTop: 4 }}>
+              <div style={{ width: 130 }}>
+                <label>Button size</label>
+                <select value={cfg.style.buttonSize ?? "md"}
+                  onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, buttonSize: e.target.value as any } })}>
+                  <option value="sm">Small</option>
+                  <option value="md">Medium</option>
+                  <option value="lg">Large</option>
+                </select>
+              </div>
+              <div style={{ width: 160 }}>
+                <label>Button order</label>
+                <select value={cfg.style.buttonOrder ?? "yes-first"}
+                  onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, buttonOrder: e.target.value as any } })}>
+                  <option value="yes-first">Main button first</option>
+                  <option value="no-first">"No" button first</option>
+                </select>
+              </div>
+              <label style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 400, height: 38 }}>
+                <input type="checkbox" checked={cfg.style.buttonFull === true}
+                  onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, buttonFull: e.target.checked } })} />
+                Full-width buttons (stacked)
+              </label>
+            </div>
             <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginTop: 10 }}>
               <label style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 400 }}>
                 <input type="checkbox" checked={cfg.style.closeButton !== false}
@@ -982,6 +1014,9 @@ export default function PropertyDetail() {
                 const logoEnd = cfg.style.logoPos === "end";
                 const minH = Math.max(0, cfg.style.minHeight ?? 0);
                 const bandBg = dark ? "#2a2b36" : "#f2f2f7";
+                const bf = cfg.style.buttonSize === "sm" ? 0.82 : cfg.style.buttonSize === "lg" ? 1.24 : 1;
+                const btnFull = cfg.style.buttonFull === true;
+                const noFirst = cfg.style.buttonOrder === "no-first";
                 const logoBand = logoBanner ? (
                   <img src={cfg.style.logo!} style={{ width: `calc(100% + ${24 * s}px)`, margin: `${bannerTop ? `${-8 * s}px ${-12 * s}px ${4 * s}px` : `${4 * s}px ${-12 * s}px ${-8 * s}px`} ${-12 * s}px`, height: 34 * s, objectFit: "contain", background: bandBg, borderRadius: bannerTop ? `${radius}px ${radius}px 0 0` : `0 0 ${radius}px ${radius}px`, padding: 4 * s, order: bannerTop ? -1 : 9 }} />
                 ) : null;
@@ -1050,17 +1085,17 @@ export default function PropertyDetail() {
                       <span style={{ fontWeight: 600 }}>{cfg.text.headline || "Get notified?"}</span>
                       {cfg.text.sub && <span style={{ fontSize: 10 * s, opacity: 0.7 }}>{cfg.text.sub}</span>}
                     </span>
-                    <span style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center", width: stack ? "100%" : undefined, justifyContent: stack ? alignFlex : undefined }}>
+                    <span style={{ display: "flex", flexDirection: btnFull ? "column" : "row", gap: 5, flexWrap: "wrap", alignItems: btnFull ? "stretch" : "center", width: stack || btnFull ? "100%" : undefined, justifyContent: stack ? alignFlex : undefined }}>
                       <span style={{
                         background: cfg.style.buttonStyle === "outline" ? "transparent" : cfg.style.accent,
                         color: cfg.style.buttonStyle === "outline" ? cfg.style.accent : "#fff",
                         border: cfg.style.buttonStyle === "outline" ? `2px solid ${cfg.style.accent}` : "none",
-                        borderRadius: btnRadius, padding: `${5 * s}px ${9 * s}px`, fontWeight: 600, whiteSpace: "nowrap",
+                        borderRadius: btnRadius, padding: `${5 * s * bf}px ${9 * s * bf}px`, fontSize: 11.5 * s * bf, fontWeight: 600, whiteSpace: "nowrap", textAlign: "center", order: noFirst ? 2 : 0,
                       }}>{cfg.text.yes || "Yes"}</span>
                       {cfg.style.showNo !== false && (
-                        <span style={{ background: noBg, color: noColor, border: `1px solid ${noBorder}`, borderRadius: btnRadius, padding: `${5 * s}px ${9 * s}px`, fontWeight: 600, whiteSpace: "nowrap" }}>{cfg.text.no || "No"}</span>
+                        <span style={{ background: noBg, color: noColor, border: `1px solid ${noBorder}`, borderRadius: btnRadius, padding: `${5 * s * bf}px ${9 * s * bf}px`, fontSize: 11.5 * s * bf, fontWeight: 600, whiteSpace: "nowrap", textAlign: "center", order: noFirst ? 1 : 0 }}>{cfg.text.no || "No"}</span>
                       )}
-                      {cfg.style.closeButton !== false && <span style={{ color: "#999", padding: `${5 * s}px 3px` }}>✕</span>}
+                      {cfg.style.closeButton !== false && !btnFull && <span style={{ color: "#999", padding: `${5 * s}px 3px` }}>✕</span>}
                     </span>
                     {/* drag-to-resize handle (bottom-right corner) */}
                     <div
