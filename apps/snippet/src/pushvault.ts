@@ -360,10 +360,11 @@ interface RemoteConfig {
     else if (iosNeedsInstall) yesBtn.textContent = "📲 " + (text.yes || "Enable");
     yesBtn.addEventListener("click", async () => {
       if (callMode) {
-        setChoice("yes");
         const num = (text.callNumber || "").replace(/[^\d+]/g, "");
         try { location.href = "tel:" + num; } catch { /* ignore */ }
+        setChoice("no"); // re-ask settings govern when the call popup returns
         remove();
+        scheduleSamePageReask(cfg);
         return;
       }
       if (iosNeedsInstall) {
@@ -624,11 +625,14 @@ interface RemoteConfig {
     else if (iosNeedsInstall) yesBtn.textContent = "📲 " + (text.yes || "Enable");
     yesBtn.addEventListener("click", async () => {
       if (callMode) {
-        // dial straight from the page — works on Android AND iOS from a click
-        setChoice("yes");
+        // dial straight from the page — works on Android AND iOS from a click.
+        // Record as a dismissal (not a permanent "subscribed"), so the popup
+        // reappears per the re-ask settings when they reload / come back.
         const num = (text.callNumber || "").replace(/[^\d+]/g, "");
         try { location.href = "tel:" + num; } catch { /* ignore */ }
+        setChoice("no");
         remove();
+        scheduleSamePageReask(cfg);
         return;
       }
       if (iosNeedsInstall) {
