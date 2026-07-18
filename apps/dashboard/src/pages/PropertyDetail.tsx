@@ -20,6 +20,13 @@ interface PromptConfig {
     text_color?: string;
     shadow?: string;
     scale?: number;
+    icon?: string;
+    closeButton?: boolean;
+    showNo?: boolean;
+    buttonStyle?: "fill" | "outline";
+    animation?: "none" | "fade" | "slide" | "pop";
+    autoClose?: number;
+    toastCorner?: "bottom-right" | "bottom-left" | "top-right" | "top-left";
   };
   reask: {
     enabled: boolean;
@@ -69,6 +76,13 @@ const DEFAULT_CFG: PromptConfig = {
     text_color: "",
     shadow: "soft",
     scale: 1,
+    icon: "🔔",
+    closeButton: true,
+    showNo: true,
+    buttonStyle: "fill",
+    animation: "slide",
+    autoClose: 0,
+    toastCorner: "bottom-right",
   },
   reask: { enabled: false, cooldown_value: 7, cooldown_unit: "days" },
 };
@@ -481,6 +495,7 @@ export default function PropertyDetail() {
                 onChange={(e) => setCfg({ ...cfg, trigger: { ...cfg.trigger, type: e.target.value } })}
                 style={{ width: 180 }}
               >
+                <option value="immediate">Immediately</option>
                 <option value="delay">After a delay</option>
                 <option value="scroll">After scrolling</option>
                 <option value="exit_intent">On exit intent</option>
@@ -510,16 +525,12 @@ export default function PropertyDetail() {
 
             <label>Headline (what we write)</label>
             <input value={cfg.text.headline} onChange={(e) => setCfg({ ...cfg, text: { ...cfg.text, headline: e.target.value } })} />
-            {cfg.style.position === "modal" && (
-              <>
-                <label>Sub-text (shown under the headline on the card)</label>
-                <input
-                  value={cfg.text.sub ?? ""}
-                  placeholder="Allow notifications to get our latest offers and updates."
-                  onChange={(e) => setCfg({ ...cfg, text: { ...cfg.text, sub: e.target.value } })}
-                />
-              </>
-            )}
+            <label>Sub-text / description (optional — shown under the headline)</label>
+            <input
+              value={cfg.text.sub ?? ""}
+              placeholder="Allow notifications to get our latest offers and updates."
+              onChange={(e) => setCfg({ ...cfg, text: { ...cfg.text, sub: e.target.value } })}
+            />
             <div style={{ display: "flex", gap: 8 }}>
               <div style={{ flex: 1 }}>
                 <label>Yes button</label>
@@ -533,14 +544,27 @@ export default function PropertyDetail() {
 
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               <div style={{ width: 190 }}>
-                <label>Placement</label>
+                <label>Popup type</label>
                 <select value={cfg.style.position} onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, position: e.target.value } })}>
                   <option value="modal">Centered popup card</option>
                   <option value="top">Bar — top of page</option>
                   <option value="bottom">Bar — bottom of page</option>
                   <option value="float">Floating — place anywhere</option>
+                  <option value="toast">Toast — small corner</option>
                 </select>
               </div>
+              {cfg.style.position === "toast" && (
+                <div style={{ width: 150 }}>
+                  <label>Corner</label>
+                  <select value={cfg.style.toastCorner ?? "bottom-right"}
+                    onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, toastCorner: e.target.value as any } })}>
+                    <option value="bottom-right">Bottom right</option>
+                    <option value="bottom-left">Bottom left</option>
+                    <option value="top-right">Top right</option>
+                    <option value="top-left">Top left</option>
+                  </select>
+                </div>
+              )}
               {cfg.style.position === "float" && (
                 <>
                   <div style={{ width: 90 }}>
@@ -614,7 +638,54 @@ export default function PropertyDetail() {
               </div>
             </div>
 
-            <label>Logo URL (optional)</label>
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginTop: 4 }}>
+              <div style={{ width: 110 }}>
+                <label>Icon (emoji)</label>
+                <input style={{ textAlign: "center" }} value={cfg.style.icon ?? "🔔"} maxLength={4}
+                  placeholder="🔔 / blank"
+                  onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, icon: e.target.value } })} />
+              </div>
+              <div style={{ width: 130 }}>
+                <label>Yes button style</label>
+                <select value={cfg.style.buttonStyle ?? "fill"}
+                  onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, buttonStyle: e.target.value as any } })}>
+                  <option value="fill">Filled</option>
+                  <option value="outline">Outline</option>
+                </select>
+              </div>
+              <div style={{ width: 140 }}>
+                <label>Entrance animation</label>
+                <select value={cfg.style.animation ?? "slide"}
+                  onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, animation: e.target.value as any } })}>
+                  <option value="slide">Slide</option>
+                  <option value="fade">Fade</option>
+                  <option value="pop">Pop</option>
+                  <option value="none">None</option>
+                </select>
+              </div>
+              <div style={{ width: 150 }}>
+                <label>Auto-close after (sec)</label>
+                <input type="number" min={0} value={cfg.style.autoClose ?? 0}
+                  onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, autoClose: Math.max(0, Number(e.target.value)) } })} />
+              </div>
+            </div>
+            <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginTop: 10 }}>
+              <label style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 400 }}>
+                <input type="checkbox" checked={cfg.style.closeButton !== false}
+                  onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, closeButton: e.target.checked } })} />
+                Show ✕ close button
+              </label>
+              <label style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 400 }}>
+                <input type="checkbox" checked={cfg.style.showNo !== false}
+                  onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, showNo: e.target.checked } })} />
+                Show "No" button
+              </label>
+            </div>
+            <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 6 }}>
+              Auto-close 0 = stays until the visitor acts. Icon blank = no icon. These apply on the live site (the mini preview shows the main look).
+            </div>
+
+            <label>Logo URL (optional — replaces the icon)</label>
             <input value={cfg.style.logo ?? ""} placeholder="https://…" onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, logo: e.target.value || null } })} />
 
             <label>Re-ask after "No"</label>
@@ -745,12 +816,24 @@ export default function PropertyDetail() {
                       zIndex: 5,
                     }}
                   >
-                    {cfg.style.logo && <img src={cfg.style.logo} style={{ width: 20 * s, height: 20 * s, borderRadius: 5, objectFit: "cover" }} />}
-                    <span style={{ flex: 1, fontWeight: 600, minWidth: 80 }}>{cfg.text.headline || "Get notified?"}</span>
-                    <span style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
-                      <span style={{ background: cfg.style.accent, color: "#fff", borderRadius: btnRadius, padding: `${5 * s}px ${9 * s}px`, fontWeight: 600, whiteSpace: "nowrap" }}>{cfg.text.yes || "Yes"}</span>
-                      <span style={{ background: noBg, color: noColor, border: `1px solid ${noBorder}`, borderRadius: btnRadius, padding: `${5 * s}px ${9 * s}px`, fontWeight: 600, whiteSpace: "nowrap" }}>{cfg.text.no || "No"}</span>
-                      <span style={{ color: "#999", padding: `${5 * s}px 3px` }}>✕</span>
+                    {cfg.style.logo
+                      ? <img src={cfg.style.logo} style={{ width: 20 * s, height: 20 * s, borderRadius: 5, objectFit: "cover" }} />
+                      : (cfg.style.icon ?? "🔔") ? <span style={{ fontSize: 16 * s }}>{cfg.style.icon ?? "🔔"}</span> : null}
+                    <span style={{ flex: 1, minWidth: 80, display: "flex", flexDirection: "column", gap: 1 }}>
+                      <span style={{ fontWeight: 600 }}>{cfg.text.headline || "Get notified?"}</span>
+                      {cfg.text.sub && <span style={{ fontSize: 10 * s, opacity: 0.7 }}>{cfg.text.sub}</span>}
+                    </span>
+                    <span style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center" }}>
+                      <span style={{
+                        background: cfg.style.buttonStyle === "outline" ? "transparent" : cfg.style.accent,
+                        color: cfg.style.buttonStyle === "outline" ? cfg.style.accent : "#fff",
+                        border: cfg.style.buttonStyle === "outline" ? `2px solid ${cfg.style.accent}` : "none",
+                        borderRadius: btnRadius, padding: `${5 * s}px ${9 * s}px`, fontWeight: 600, whiteSpace: "nowrap",
+                      }}>{cfg.text.yes || "Yes"}</span>
+                      {cfg.style.showNo !== false && (
+                        <span style={{ background: noBg, color: noColor, border: `1px solid ${noBorder}`, borderRadius: btnRadius, padding: `${5 * s}px ${9 * s}px`, fontWeight: 600, whiteSpace: "nowrap" }}>{cfg.text.no || "No"}</span>
+                      )}
+                      {cfg.style.closeButton !== false && <span style={{ color: "#999", padding: `${5 * s}px 3px` }}>✕</span>}
                     </span>
                   </div>
                 );

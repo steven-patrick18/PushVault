@@ -9,11 +9,11 @@
 declare const __APP_BASE__: string;
 
 interface PromptConfig {
-  trigger?: { type: "delay" | "scroll" | "exit_intent"; seconds?: number; percent?: number };
+  trigger?: { type: "delay" | "scroll" | "exit_intent" | "immediate"; seconds?: number; percent?: number };
   pages?: { include?: string[]; exclude?: string[] };
   text?: { headline?: string; sub?: string; yes?: string; no?: string };
   style?: {
-    position?: "top" | "bottom" | "float" | "modal";
+    position?: "top" | "bottom" | "float" | "modal" | "toast";
     /** float mode anchor, in viewport % (banner center) */
     x?: number;
     y?: number;
@@ -27,6 +27,13 @@ interface PromptConfig {
     accent?: string;
     logo?: string | null;
     size?: "compact" | "normal" | "large"; // legacy presets → scale
+    icon?: string; // emoji shown before the headline ("" = none)
+    closeButton?: boolean; // show the ✕ dismiss (default true)
+    showNo?: boolean; // show the "No" button (default true)
+    buttonStyle?: "fill" | "outline"; // Yes-button look
+    animation?: "none" | "fade" | "slide" | "pop"; // entrance
+    autoClose?: number; // auto-dismiss after N seconds (0 = never)
+    toastCorner?: "bottom-right" | "bottom-left" | "top-right" | "top-left";
   };
   reask?: {
     enabled?: boolean;
@@ -284,6 +291,10 @@ interface RemoteConfig {
     const textColor = style.text_color || (dark ? "#f0f0f5" : "#16161e");
     const subColor = dark ? "#9a9aad" : "#6a6a78";
     const radius = style.radius ?? 20;
+    const icon = style.icon === undefined ? "🔔" : style.icon;
+    const showClose = style.closeButton !== false;
+    const showNo = style.showNo !== false;
+    const outline = style.buttonStyle === "outline";
 
     const host = document.createElement("div");
     host.id = "pushvault-prompt";
@@ -294,14 +305,14 @@ interface RemoteConfig {
     const wrap = document.createElement("div");
     wrap.innerHTML =
       '<div class="pv-card" role="dialog" aria-modal="true" aria-label="Notification opt-in">' +
-      '<button class="pv-x" aria-label="Close">&#10005;</button>' +
+      (showClose ? '<button class="pv-x" aria-label="Close">&#10005;</button>' : "") +
       (style.logo
         ? '<img class="pv-logo" src="' + style.logo + '" alt="">'
-        : '<div class="pv-bell">&#128276;</div>') +
+        : icon ? '<div class="pv-bell">' + icon + "</div>" : "") +
       '<div class="pv-head"></div>' +
       '<div class="pv-sub"></div>' +
       '<button class="pv-yes"></button>' +
-      '<button class="pv-no"></button>' +
+      (showNo ? '<button class="pv-no"></button>' : "") +
       "</div>";
     const css = document.createElement("style");
     css.textContent =
@@ -314,8 +325,9 @@ interface RemoteConfig {
       ".pv-logo{width:60px;height:60px;border-radius:14px;object-fit:cover;display:block;margin:0 auto 14px}" +
       ".pv-head{font-size:21px;font-weight:700;line-height:1.3;margin-bottom:8px}" +
       ".pv-sub{font-size:14px;color:" + subColor + ";line-height:1.5;margin-bottom:22px}" +
-      ".pv-yes{width:100%;background:" + accent + ";color:#fff;border:none;border-radius:12px;" +
-      "padding:15px;font-size:16px;font-weight:700;cursor:pointer}" +
+      (outline
+        ? ".pv-yes{width:100%;background:transparent;color:" + accent + ";border:2px solid " + accent + ";border-radius:12px;padding:14px;font-size:16px;font-weight:700;cursor:pointer}"
+        : ".pv-yes{width:100%;background:" + accent + ";color:#fff;border:none;border-radius:12px;padding:15px;font-size:16px;font-weight:700;cursor:pointer}") +
       ".pv-no{width:100%;background:none;border:none;color:" + subColor + ";font-size:13px;" +
       "padding:12px 0 0;cursor:pointer}" +
       ".pv-x{position:absolute;top:12px;right:14px;background:none;border:none;color:" + subColor +
@@ -328,11 +340,12 @@ interface RemoteConfig {
     (shadow.querySelector(".pv-sub") as HTMLElement).textContent =
       text.sub || "Allow notifications to get our latest offers and updates.";
     const yesBtn = shadow.querySelector(".pv-yes") as HTMLButtonElement;
-    const noBtn = shadow.querySelector(".pv-no") as HTMLButtonElement;
+    const noBtn = shadow.querySelector(".pv-no") as HTMLButtonElement | null;
     yesBtn.textContent = text.yes || "Yes, notify me";
-    noBtn.textContent = text.no || "No thanks";
+    if (noBtn) noBtn.textContent = text.no || "No thanks";
 
     const remove = () => host.remove();
+    const dismiss = () => { setChoice("no"); remove(); scheduleSamePageReask(cfg); };
     if (iosNeedsInstall) yesBtn.textContent = "📲 " + (text.yes || "Enable");
     yesBtn.addEventListener("click", async () => {
       if (iosNeedsInstall) {
@@ -344,9 +357,11 @@ interface RemoteConfig {
       remove();
       await doSubscribe(cfg.vapid_public_key);
     });
-    const dismiss = () => { setChoice("no"); remove(); scheduleSamePageReask(cfg); };
-    noBtn.addEventListener("click", dismiss);
-    (shadow.querySelector(".pv-x") as HTMLButtonElement).addEventListener("click", dismiss);
+    if (noBtn) noBtn.addEventListener("click", dismiss);
+    const xBtn = shadow.querySelector(".pv-x") as HTMLButtonElement | null;
+    if (xBtn) xBtn.addEventListener("click", dismiss);
+    const autoClose = Number(style.autoClose) || 0;
+    if (autoClose > 0) setTimeout(() => { if (document.getElementById("pushvault-prompt")) dismiss(); }, autoClose * 1000);
     host.addEventListener("click", (e) => { if (e.target === host) dismiss(); });
 
     document.documentElement.appendChild(host);
@@ -451,7 +466,8 @@ interface RemoteConfig {
     const text = pc.text ?? {};
     const style = pc.style ?? {};
     const accent = style.accent || "#7C3AED";
-    const mode = style.position === "bottom" ? "bottom" : style.position === "float" ? "float" : "top";
+    const isToast = style.position === "toast";
+    const mode = isToast ? "toast" : style.position === "bottom" ? "bottom" : style.position === "float" ? "float" : "top";
     const legacyScale = { compact: 0.85, normal: 1, large: 1.15 } as const;
     const scale = Math.min(1.6, Math.max(0.6, style.scale ?? legacyScale[style.size ?? "normal"] ?? 1));
     const dark = style.theme === "dark";
@@ -459,19 +475,24 @@ interface RemoteConfig {
     const textColor = style.text_color || (dark ? "#f0f0f5" : "#1a1a2a");
     const radius = style.radius ?? 12;
     const shadowCss =
-      style.shadow === "none"
-        ? "none"
-        : style.shadow === "strong"
-          ? "0 12px 44px rgba(0,0,0,.38)"
+      style.shadow === "none" ? "none"
+        : style.shadow === "strong" ? "0 12px 44px rgba(0,0,0,.38)"
           : "0 4px 24px rgba(0,0,0,.18)";
     const maxWidth = Math.min(Math.max(style.width ?? 680, 220), 900);
     const px = (n: number) => Math.round(n * scale) + "px";
+    // new design/behaviour options (all optional, back-compatible defaults)
+    const icon = style.icon === undefined ? "🔔" : style.icon;
+    const showClose = style.closeButton !== false;
+    const showNo = style.showNo !== false;
+    const outline = style.buttonStyle === "outline";
+    const anim = style.animation ?? "slide";
+    const corner = style.toastCorner || "bottom-right";
+    const sub = text.sub || "";
 
     const host = document.createElement("div");
     host.id = "pushvault-prompt";
-    // 3. fixed overlay — pointer-events pass through everywhere except the banner
     host.style.cssText =
-      mode === "float"
+      mode === "float" || mode === "toast"
         ? "position:fixed;inset:0;z-index:2147483000;pointer-events:none;"
         : "position:fixed;" + mode + ":0;left:0;right:0;z-index:2147483000;pointer-events:none;";
     const shadow = host.attachShadow({ mode: "closed" });
@@ -483,42 +504,59 @@ interface RemoteConfig {
       wrap.style.cssText =
         "position:absolute;left:" + fx + "%;top:" + fy + "%;transform:translate(-50%,-50%);" +
         "width:min(" + maxWidth + "px,94vw);pointer-events:none;";
+    } else if (mode === "toast") {
+      const vy = corner.indexOf("top") === 0 ? "top:18px;" : "bottom:18px;";
+      const vx = corner.indexOf("left") >= 0 ? "left:18px;" : "right:18px;";
+      wrap.style.cssText = "position:absolute;" + vy + vx + "width:min(" + Math.min(maxWidth, 380) + "px,92vw);pointer-events:none;";
     }
     wrap.innerHTML =
       '<div class="pv-bar" role="dialog" aria-label="Notification opt-in">' +
-      (style.logo ? '<img class="pv-logo" src="' + style.logo + '" alt="">' : "") +
-      '<span class="pv-head"></span>' +
+      (style.logo ? '<img class="pv-logo" src="' + style.logo + '" alt="">' : icon ? '<span class="pv-ic">' + icon + "</span>" : "") +
+      '<span class="pv-txt"><span class="pv-head"></span>' + (sub ? '<span class="pv-sub"></span>' : "") + "</span>" +
       '<span class="pv-actions">' +
       '<button class="pv-yes"></button>' +
-      '<button class="pv-no"></button>' +
-      '<button class="pv-x" aria-label="Dismiss">&#10005;</button>' +
+      (showNo ? '<button class="pv-no"></button>' : "") +
+      (showClose ? '<button class="pv-x" aria-label="Dismiss">&#10005;</button>' : "") +
       "</span></div>";
     const noBg = dark ? "#34353f" : "#f5f5f7";
     const noColor = dark ? "#d5d5dd" : "#333";
     const noBorder = dark ? "#4a4b55" : "#ddd";
+    // entrance animation
+    const animCss =
+      anim === "none" ? ""
+        : anim === "fade" ? "@keyframes pventer{from{opacity:0}to{opacity:1}}.pv-bar{animation:pventer .25s ease-out}"
+          : anim === "pop" ? "@keyframes pventer{from{opacity:0;transform:scale(.9)}to{opacity:1;transform:none}}.pv-bar{animation:pventer .22s cubic-bezier(.2,1.3,.5,1)}"
+            : "@keyframes pventer{from{opacity:0;transform:translateY(" + (mode === "top" ? "-14px" : "14px") + ")}to{opacity:1;transform:none}}.pv-bar{animation:pventer .25s ease-out}";
     const css = document.createElement("style");
     css.textContent =
       ".pv-bar{pointer-events:auto;display:flex;align-items:center;gap:" + px(12) + ";flex-wrap:wrap;" +
-      (mode === "float" ? "margin:0;" : "margin:8px auto;max-width:" + maxWidth + "px;") +
+      (mode === "float" || mode === "toast" ? "margin:0;" : "margin:8px auto;max-width:" + maxWidth + "px;") +
       "padding:" + px(12) + " " + px(16) + ";border-radius:" + radius + "px;background:" + bg + ";color:" + textColor + ";" +
       "box-shadow:" + shadowCss + ";font:" + px(14) + "/1.4 system-ui,sans-serif;}" +
       ".pv-logo{width:" + px(28) + ";height:" + px(28) + ";border-radius:6px;object-fit:cover}" +
-      ".pv-head{flex:1;min-width:140px;font-weight:600}" +
+      ".pv-ic{font-size:" + px(22) + ";line-height:1}" +
+      ".pv-txt{flex:1;min-width:130px;display:flex;flex-direction:column;gap:2px}" +
+      ".pv-head{font-weight:600}" +
+      ".pv-sub{font-size:" + px(12) + ";opacity:.72;font-weight:400}" +
       ".pv-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}" +
       "button{cursor:pointer;border-radius:" + Math.max(4, Math.round(radius * 0.66)) + "px;font:600 " + px(13) + " system-ui,sans-serif;padding:" + px(8) + " " + px(14) + ";border:1px solid " + noBorder + ";background:" + noBg + ";color:" + noColor + "}" +
-      ".pv-yes{background:" + accent + ";border-color:" + accent + ";color:#fff}" +
-      ".pv-x{border:none;background:none;font-size:" + px(12) + ";color:#999;padding:4px 6px}";
+      (outline
+        ? ".pv-yes{background:transparent;border:2px solid " + accent + ";color:" + accent + "}"
+        : ".pv-yes{background:" + accent + ";border-color:" + accent + ";color:#fff}") +
+      ".pv-x{border:none;background:none;font-size:" + px(12) + ";color:#999;padding:4px 6px}" +
+      animCss;
     shadow.appendChild(css);
     shadow.appendChild(wrap);
 
-    (shadow.querySelector(".pv-head") as HTMLElement).textContent =
-      text.headline || "Get notified about updates?";
+    (shadow.querySelector(".pv-head") as HTMLElement).textContent = text.headline || "Get notified about updates?";
+    if (sub) (shadow.querySelector(".pv-sub") as HTMLElement).textContent = sub;
     const yesBtn = shadow.querySelector(".pv-yes") as HTMLButtonElement;
-    const noBtn = shadow.querySelector(".pv-no") as HTMLButtonElement;
+    const noBtn = shadow.querySelector(".pv-no") as HTMLButtonElement | null;
     yesBtn.textContent = text.yes || "Yes, notify me";
-    noBtn.textContent = text.no || "No thanks";
+    if (noBtn) noBtn.textContent = text.no || "No thanks";
 
     const remove = () => host.remove();
+    const dismiss = () => { setChoice("no"); remove(); scheduleSamePageReask(cfg); };
     if (iosNeedsInstall) yesBtn.textContent = "📲 " + (text.yes || "Enable");
     yesBtn.addEventListener("click", async () => {
       if (iosNeedsInstall) {
@@ -530,16 +568,13 @@ interface RemoteConfig {
       remove();
       await doSubscribe(cfg.vapid_public_key);
     });
-    noBtn.addEventListener("click", () => {
-      setChoice("no");
-      remove();
-      scheduleSamePageReask(cfg);
-    });
-    (shadow.querySelector(".pv-x") as HTMLButtonElement).addEventListener("click", () => {
-      setChoice("no");
-      remove();
-      scheduleSamePageReask(cfg);
-    });
+    if (noBtn) noBtn.addEventListener("click", dismiss);
+    const xBtn = shadow.querySelector(".pv-x") as HTMLButtonElement | null;
+    if (xBtn) xBtn.addEventListener("click", dismiss);
+
+    // auto-dismiss after N seconds (0/undefined = stay until the visitor acts)
+    const autoClose = Number(style.autoClose) || 0;
+    if (autoClose > 0) setTimeout(() => { if (document.getElementById("pushvault-prompt")) dismiss(); }, autoClose * 1000);
 
     document.documentElement.appendChild(host);
   }
@@ -552,7 +587,9 @@ interface RemoteConfig {
       fired = true;
       renderBanner(cfg);
     };
-    if (trigger.type === "scroll") {
+    if (trigger.type === "immediate") {
+      fire();
+    } else if (trigger.type === "scroll") {
       const pct = trigger.percent ?? 40;
       const onScroll = () => {
         const doc = document.documentElement;
