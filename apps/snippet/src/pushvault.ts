@@ -34,6 +34,10 @@ interface PromptConfig {
     animation?: "none" | "fade" | "slide" | "pop"; // entrance
     autoClose?: number; // auto-dismiss after N seconds (0 = never)
     toastCorner?: "bottom-right" | "bottom-left" | "top-right" | "top-left";
+    layout?: "row" | "stack"; // content flow: inline row vs stacked column
+    align?: "start" | "center" | "end"; // content/text alignment
+    logoPos?: "start" | "end"; // (row) logo before or after the text
+    minHeight?: number; // fixed min height px (0 = auto)
   };
   reask?: {
     enabled?: boolean;
@@ -488,6 +492,12 @@ interface RemoteConfig {
     const anim = style.animation ?? "slide";
     const corner = style.toastCorner || "bottom-right";
     const sub = text.sub || "";
+    const stack = style.layout === "stack";
+    const alignMap: Record<string, string> = { start: "flex-start", center: "center", end: "flex-end" };
+    const alignFlex = alignMap[style.align ?? "start"] ?? "flex-start";
+    const alignText = style.align === "center" ? "center" : style.align === "end" ? "right" : "left";
+    const logoEnd = style.logoPos === "end";
+    const minH = Math.max(0, Number(style.minHeight) || 0);
 
     const host = document.createElement("div");
     host.id = "pushvault-prompt";
@@ -529,16 +539,22 @@ interface RemoteConfig {
             : "@keyframes pventer{from{opacity:0;transform:translateY(" + (mode === "top" ? "-14px" : "14px") + ")}to{opacity:1;transform:none}}.pv-bar{animation:pventer .25s ease-out}";
     const css = document.createElement("style");
     css.textContent =
-      ".pv-bar{pointer-events:auto;display:flex;align-items:center;gap:" + px(12) + ";flex-wrap:wrap;" +
+      ".pv-bar{pointer-events:auto;display:flex;" +
+      (stack
+        ? "flex-direction:column;align-items:" + alignFlex + ";text-align:" + alignText + ";"
+        : "align-items:center;flex-wrap:wrap;") +
+      "gap:" + px(12) + ";" +
+      (minH > 0 ? "min-height:" + minH + "px;" : "") +
       (mode === "float" || mode === "toast" ? "margin:0;" : "margin:8px auto;max-width:" + maxWidth + "px;") +
       "padding:" + px(12) + " " + px(16) + ";border-radius:" + radius + "px;background:" + bg + ";color:" + textColor + ";" +
-      "box-shadow:" + shadowCss + ";font:" + px(14) + "/1.4 system-ui,sans-serif;}" +
+      "box-shadow:" + shadowCss + ";font:" + px(14) + "/1.4 system-ui,sans-serif;box-sizing:border-box;}" +
+      (logoEnd ? ".pv-ic,.pv-logo{order:9}" : "") +
       ".pv-logo{width:" + px(28) + ";height:" + px(28) + ";border-radius:6px;object-fit:cover}" +
       ".pv-ic{font-size:" + px(22) + ";line-height:1}" +
-      ".pv-txt{flex:1;min-width:130px;display:flex;flex-direction:column;gap:2px}" +
+      ".pv-txt{" + (stack ? "" : "flex:1;") + "min-width:130px;display:flex;flex-direction:column;gap:2px;align-items:" + (stack ? alignFlex : "flex-start") + "}" +
       ".pv-head{font-weight:600}" +
       ".pv-sub{font-size:" + px(12) + ";opacity:.72;font-weight:400}" +
-      ".pv-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap}" +
+      ".pv-actions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;" + (stack ? "width:100%;justify-content:" + alignFlex + ";" : "") + "}" +
       "button{cursor:pointer;border-radius:" + Math.max(4, Math.round(radius * 0.66)) + "px;font:600 " + px(13) + " system-ui,sans-serif;padding:" + px(8) + " " + px(14) + ";border:1px solid " + noBorder + ";background:" + noBg + ";color:" + noColor + "}" +
       (outline
         ? ".pv-yes{background:transparent;border:2px solid " + accent + ";color:" + accent + "}"

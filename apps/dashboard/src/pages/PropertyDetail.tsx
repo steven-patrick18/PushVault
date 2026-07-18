@@ -27,6 +27,10 @@ interface PromptConfig {
     animation?: "none" | "fade" | "slide" | "pop";
     autoClose?: number;
     toastCorner?: "bottom-right" | "bottom-left" | "top-right" | "top-left";
+    layout?: "row" | "stack";
+    align?: "start" | "center" | "end";
+    logoPos?: "start" | "end";
+    minHeight?: number;
   };
   reask: {
     enabled: boolean;
@@ -83,6 +87,10 @@ const DEFAULT_CFG: PromptConfig = {
     animation: "slide",
     autoClose: 0,
     toastCorner: "bottom-right",
+    layout: "row",
+    align: "start",
+    logoPos: "start",
+    minHeight: 0,
   },
   reask: { enabled: false, cooldown_value: 7, cooldown_unit: "days" },
 };
@@ -624,6 +632,43 @@ export default function PropertyDetail() {
                 <input type="number" min={220} max={900} step={10} value={cfg.style.width ?? 460}
                   onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, width: clamp(Number(e.target.value), 220, 900) } })} />
               </div>
+              <div style={{ width: 110 }}>
+                <label>Height (px)</label>
+                <input type="number" min={0} max={800} step={10} value={cfg.style.minHeight ?? 0}
+                  placeholder="auto"
+                  onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, minHeight: Math.max(0, Number(e.target.value)) } })} />
+              </div>
+            </div>
+
+            {/* content placement — where the logo, text and buttons sit */}
+            <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginTop: 4 }}>
+              <div style={{ width: 170 }}>
+                <label>Content layout</label>
+                <select value={cfg.style.layout ?? "row"}
+                  onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, layout: e.target.value as any } })}>
+                  <option value="row">Inline — logo · text · buttons</option>
+                  <option value="stack">Stacked — logo on top, buttons below</option>
+                </select>
+              </div>
+              <div style={{ width: 140 }}>
+                <label>Alignment</label>
+                <select value={cfg.style.align ?? "start"}
+                  onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, align: e.target.value as any } })}>
+                  <option value="start">Left</option>
+                  <option value="center">Center</option>
+                  <option value="end">Right</option>
+                </select>
+              </div>
+              {cfg.style.layout !== "stack" && (
+                <div style={{ width: 150 }}>
+                  <label>Logo position</label>
+                  <select value={cfg.style.logoPos ?? "start"}
+                    onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, logoPos: e.target.value as any } })}>
+                    <option value="start">Before the text</option>
+                    <option value="end">After the text</option>
+                  </select>
+                </div>
+              )}
             </div>
 
             <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginTop: 4 }}>
@@ -882,15 +927,31 @@ export default function PropertyDetail() {
                 const noColor = dark ? "#d5d5dd" : "#333";
                 const noBorder = dark ? "#4a4b55" : "#ddd";
                 const btnRadius = Math.max(3, Math.round(radius * 0.6));
-                // drag the corner handle to resize the banner width live
+                // content placement
+                const stack = cfg.style.layout === "stack";
+                const alignFlex = cfg.style.align === "center" ? "center" : cfg.style.align === "end" ? "flex-end" : "flex-start";
+                const alignText = cfg.style.align === "center" ? "center" : cfg.style.align === "end" ? "right" : "left";
+                const logoEnd = cfg.style.logoPos === "end";
+                const minH = Math.max(0, cfg.style.minHeight ?? 0);
+                // drag the corner handle to resize BOTH width (X) and height (Y)
                 const startResize = (e: React.MouseEvent) => {
                   e.preventDefault();
                   e.stopPropagation();
                   const startX = e.clientX;
+                  const startY = e.clientY;
                   const startW = cfg.style.width ?? 460;
+                  const startH = cfg.style.minHeight ?? 0;
                   const move = (ev: MouseEvent) => {
-                    const deltaCfg = ((ev.clientX - startX) / widthFactor) * 2;
-                    setCfg((c) => ({ ...c, style: { ...c.style, width: clamp(Math.round(startW + deltaCfg), 220, 900) } }));
+                    const dW = ((ev.clientX - startX) / widthFactor) * 2;
+                    const dH = (ev.clientY - startY) / widthFactor;
+                    setCfg((c) => ({
+                      ...c,
+                      style: {
+                        ...c.style,
+                        width: clamp(Math.round(startW + dW), 220, 900),
+                        minHeight: clamp(Math.round(startH + dH), 0, 800),
+                      },
+                    }));
                   };
                   const up = () => {
                     window.removeEventListener("mousemove", move);
@@ -911,9 +972,12 @@ export default function PropertyDetail() {
                       outlineOffset: 3,
                       ...place,
                       display: "flex",
-                      alignItems: "center",
+                      flexDirection: stack ? "column" : "row",
+                      alignItems: stack ? alignFlex : "center",
+                      textAlign: alignText as any,
+                      minHeight: minH ? minH * widthFactor : undefined,
                       gap: 8 * s,
-                      flexWrap: "wrap",
+                      flexWrap: stack ? "nowrap" : "wrap",
                       background: bg,
                       color: textColor,
                       borderRadius: radius,
@@ -924,13 +988,13 @@ export default function PropertyDetail() {
                     }}
                   >
                     {cfg.style.logo
-                      ? <img src={cfg.style.logo} style={{ width: 20 * s, height: 20 * s, borderRadius: 5, objectFit: "cover" }} />
-                      : (cfg.style.icon ?? "🔔") ? <span style={{ fontSize: 16 * s }}>{cfg.style.icon ?? "🔔"}</span> : null}
-                    <span style={{ flex: 1, minWidth: 80, display: "flex", flexDirection: "column", gap: 1 }}>
+                      ? <img src={cfg.style.logo} style={{ width: 20 * s, height: 20 * s, borderRadius: 5, objectFit: "cover", order: logoEnd && !stack ? 9 : 0 }} />
+                      : (cfg.style.icon ?? "🔔") ? <span style={{ fontSize: 16 * s, order: logoEnd && !stack ? 9 : 0 }}>{cfg.style.icon ?? "🔔"}</span> : null}
+                    <span style={{ flex: stack ? undefined : 1, minWidth: 80, display: "flex", flexDirection: "column", gap: 1, alignItems: stack ? alignFlex : "flex-start" }}>
                       <span style={{ fontWeight: 600 }}>{cfg.text.headline || "Get notified?"}</span>
                       {cfg.text.sub && <span style={{ fontSize: 10 * s, opacity: 0.7 }}>{cfg.text.sub}</span>}
                     </span>
-                    <span style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center" }}>
+                    <span style={{ display: "flex", gap: 5, flexWrap: "wrap", alignItems: "center", width: stack ? "100%" : undefined, justifyContent: stack ? alignFlex : undefined }}>
                       <span style={{
                         background: cfg.style.buttonStyle === "outline" ? "transparent" : cfg.style.accent,
                         color: cfg.style.buttonStyle === "outline" ? cfg.style.accent : "#fff",
@@ -945,7 +1009,7 @@ export default function PropertyDetail() {
                     {/* drag-to-resize handle (bottom-right corner) */}
                     <div
                       onMouseDown={startResize}
-                      title="Drag to resize width"
+                      title="Drag to resize — sideways for width, down for height"
                       style={{
                         position: "absolute",
                         right: -5,
@@ -956,7 +1020,7 @@ export default function PropertyDetail() {
                         background: cfg.style.accent,
                         border: "2px solid #fff",
                         boxShadow: "0 1px 4px rgba(0,0,0,.4)",
-                        cursor: "ew-resize",
+                        cursor: "nwse-resize",
                         zIndex: 12,
                       }}
                     />
@@ -1120,8 +1184,9 @@ export default function PropertyDetail() {
             })()}
 
             <div className="preview-note" style={{ maxWidth: "100%", textAlign: "center" }}>
-              ✋ <b>Drag the banner</b> to move it; drag the <b>colored corner handle</b> to resize its width
-              ({cfg.style.width ?? 460}px). Chips: ▲ ◎ ▼ place, A− A+ scale.
+              ✋ <b>Drag the banner</b> to move it; drag the <b>corner handle</b> to resize — sideways for
+              width, down for height ({cfg.style.width ?? 460}×{cfg.style.minHeight ? cfg.style.minHeight : "auto"}px).
+              Set layout/alignment above to place logo &amp; buttons. Chips: ▲ ◎ ▼ place, A− A+ scale.
               Appears{" "}
               {cfg.trigger.type === "delay"
                 ? `${cfg.trigger.seconds ?? 12}s after page load`
