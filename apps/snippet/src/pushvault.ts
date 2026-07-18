@@ -70,6 +70,7 @@ interface PromptConfig {
     countries?: string[]; // ISO-2 upper (needs GeoIP; fails open if unknown)
     languages?: string[]; // ISO language prefix, e.g. "en", "hi"
     visitor?: "all" | "new" | "returning";
+    humansOnly?: boolean; // skip bots / crawlers / headless automation
   };
 }
 
@@ -795,9 +796,25 @@ interface RemoteConfig {
       return "other";
     }
   }
+  // Conservative bot/crawler/automation detection — only strong signals, so we
+  // never hide the prompt from a real person. Most crawlers don't run JS at all;
+  // this catches headless automation (Puppeteer/Selenium) and self-identified bots.
+  function isLikelyBot(): boolean {
+    try {
+      const ua = navigator.userAgent || "";
+      if ((navigator as any).webdriver === true) return true;
+      if (/HeadlessChrome|Headless/i.test(ua)) return true;
+      if (/bot\b|crawler|crawl |spider|slurp|scrapy|phantom|puppeteer|playwright|selenium|headless|python-requests|python-urllib|\bcurl\/|\bwget\/|lighthouse|gtmetrix|pingdom|pagespeed|facebookexternalhit|bingpreview|whatsapp|telegrambot|embedly|prerender|apache-httpclient|axios\//i.test(ua)) return true;
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
   function audienceMatches(cfg: RemoteConfig): boolean {
     const a = cfg.prompt_config?.audience;
     if (!a) return true;
+    if (a.humansOnly && isLikelyBot()) return false;
     if (a.devices && a.devices.length && a.devices.indexOf(pvDevice()) < 0) return false;
     if (a.sources && a.sources.length && a.sources.indexOf(pvSource()) < 0) return false;
     if (a.languages && a.languages.length) {

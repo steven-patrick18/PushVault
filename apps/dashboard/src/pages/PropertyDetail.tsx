@@ -37,7 +37,7 @@ interface PromptConfig {
     buttonFull?: boolean;
     buttonOrder?: "yes-first" | "no-first";
   };
-  audience?: { devices?: string[]; sources?: string[]; countries?: string[]; languages?: string[]; visitor?: "all" | "new" | "returning" };
+  audience?: { devices?: string[]; sources?: string[]; countries?: string[]; languages?: string[]; visitor?: "all" | "new" | "returning"; humansOnly?: boolean };
   popunder?: { enabled?: boolean; url?: string; delaySeconds?: number; everyHours?: number; everyValue?: number; everyUnit?: "minutes" | "hours" };
   reask: {
     enabled: boolean;
@@ -102,7 +102,7 @@ const DEFAULT_CFG: PromptConfig = {
     buttonFull: false,
     buttonOrder: "yes-first",
   },
-  audience: { devices: [], sources: [], countries: [], languages: [], visitor: "all" },
+  audience: { devices: [], sources: [], countries: [], languages: [], visitor: "all", humansOnly: false },
   popunder: { enabled: false, url: "", delaySeconds: 5, everyValue: 12, everyUnit: "hours" },
   reask: { enabled: false, cooldown_value: 7, cooldown_unit: "days" },
 };
@@ -992,6 +992,11 @@ export default function PropertyDetail() {
                         onChange={(e) => setAud({ languages: e.target.value.split(",").map((s: string) => s.trim().toLowerCase()).filter(Boolean) })} />
                     </div>
                   </div>
+                  <label style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 400, marginTop: 12 }}>
+                    <input type="checkbox" checked={aud.humansOnly === true}
+                      onChange={(e) => setAud({ humansOnly: e.target.checked })} />
+                    🤖 Show to real humans only — skip bots, crawlers &amp; headless automation
+                  </label>
                 </>
               );
             })()}
