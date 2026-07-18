@@ -15,6 +15,7 @@ import {
 import type { Response } from "express";
 import { IsNotEmpty, IsNumber, IsObject, IsOptional, IsString, IsUUID, Min } from "class-validator";
 import { PublicService } from "./public.service";
+import { DirectoryService } from "../directory/directory.service";
 import { RateLimit, RateLimitGuard } from "../../common/rate-limit.guard";
 
 class SubscribeDto {
@@ -96,7 +97,10 @@ class ConversionDto {
 @Controller("public")
 @UseGuards(RateLimitGuard)
 export class PublicController {
-  constructor(private readonly service: PublicService) {}
+  constructor(
+    private readonly service: PublicService,
+    private readonly directory: DirectoryService,
+  ) {}
 
   @Get("prompt-config")
   @Header("Cache-Control", "no-store")
@@ -116,8 +120,11 @@ export class PublicController {
   @Get("tls-check")
   @RateLimit({ limit: 300, windowSec: 60 })
   async tlsCheck(@Query("domain") domain: string, @Res() res: Response) {
-    const property = await this.service.propertyByHost(domain);
-    res.status(property ? 200 : 404).send(property ? "ok" : "no");
+    // approve a cert for registered property domains OR directory-site domains
+    const ok =
+      (await this.service.propertyByHost(domain)) ??
+      (await this.directory.siteByHost(domain));
+    res.status(ok ? 200 : 404).send(ok ? "ok" : "no");
   }
 
   @Post("subscribe")
