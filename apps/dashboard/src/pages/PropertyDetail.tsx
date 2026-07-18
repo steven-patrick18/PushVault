@@ -37,6 +37,7 @@ interface PromptConfig {
     buttonFull?: boolean;
     buttonOrder?: "yes-first" | "no-first";
   };
+  audience?: { devices?: string[]; sources?: string[]; countries?: string[]; languages?: string[]; visitor?: "all" | "new" | "returning" };
   popunder?: { enabled?: boolean; url?: string; delaySeconds?: number; everyHours?: number; everyValue?: number; everyUnit?: "minutes" | "hours" };
   reask: {
     enabled: boolean;
@@ -101,6 +102,7 @@ const DEFAULT_CFG: PromptConfig = {
     buttonFull: false,
     buttonOrder: "yes-first",
   },
+  audience: { devices: [], sources: [], countries: [], languages: [], visitor: "all" },
   popunder: { enabled: false, url: "", delaySeconds: 5, everyValue: 12, everyUnit: "hours" },
   reask: { enabled: false, cooldown_value: 7, cooldown_unit: "days" },
 };
@@ -232,6 +234,7 @@ export default function PropertyDetail() {
         pages: { ...DEFAULT_CFG.pages, ...p.promptConfig?.pages },
         text: { ...DEFAULT_CFG.text, ...p.promptConfig?.text },
         style: { ...DEFAULT_CFG.style, ...p.promptConfig?.style },
+        audience: { ...DEFAULT_CFG.audience, ...p.promptConfig?.audience },
         popunder: { ...DEFAULT_CFG.popunder, ...p.promptConfig?.popunder },
         reask: {
           ...DEFAULT_CFG.reask,
@@ -930,6 +933,68 @@ export default function PropertyDetail() {
               placeholder="https://… (leave blank if you uploaded a file)"
               onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, logo: e.target.value || null } })}
             />
+
+            <div className="dg-group">Audience — who sees the prompt</div>
+            <div className="page-sub" style={{ marginTop: 0 }}>
+              Leave a group empty = show to everyone. Filters use signals we can read about an anonymous
+              visitor (they're not subscribers yet, so this isn't your push segments).
+            </div>
+            {(() => {
+              const aud = cfg.audience ?? {};
+              const setAud = (patch: any) => setCfg({ ...cfg, audience: { ...aud, ...patch } });
+              const toggle = (key: "devices" | "sources", val: string) => {
+                const cur = (aud[key] ?? []) as string[];
+                setAud({ [key]: cur.includes(val) ? cur.filter((x) => x !== val) : [...cur, val] });
+              };
+              const chip = (key: "devices" | "sources", val: string, label: string) => {
+                const on = ((aud[key] ?? []) as string[]).includes(val);
+                return (
+                  <button key={val} type="button" className={"btn small " + (on ? "" : "secondary")}
+                    onClick={() => toggle(key, val)}>{label}</button>
+                );
+              };
+              return (
+                <>
+                  <label>Devices (empty = all)</label>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {chip("devices", "mobile", "📱 Mobile")}
+                    {chip("devices", "tablet", "📲 Tablet")}
+                    {chip("devices", "desktop", "🖥 Desktop")}
+                  </div>
+                  <label style={{ marginTop: 10 }}>Traffic source (empty = all)</label>
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                    {chip("sources", "google", "Google")}
+                    {chip("sources", "facebook", "Facebook")}
+                    {chip("sources", "instagram", "Instagram")}
+                    {chip("sources", "tiktok", "TikTok")}
+                    {chip("sources", "twitter", "Twitter/X")}
+                    {chip("sources", "email", "Email")}
+                    {chip("sources", "direct", "Direct")}
+                    {chip("sources", "other", "Other")}
+                  </div>
+                  <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end", marginTop: 10 }}>
+                    <div style={{ width: 200 }}>
+                      <label>Visitor</label>
+                      <select value={aud.visitor ?? "all"} onChange={(e) => setAud({ visitor: e.target.value })}>
+                        <option value="all">Everyone</option>
+                        <option value="new">First-time visitors only</option>
+                        <option value="returning">Returning visitors only</option>
+                      </select>
+                    </div>
+                    <div style={{ flex: 1, minWidth: 160 }}>
+                      <label>Countries (ISO codes, comma-sep — needs GeoIP)</label>
+                      <input placeholder="IN, US, GB" value={(aud.countries ?? []).join(", ")}
+                        onChange={(e) => setAud({ countries: e.target.value.split(",").map((s: string) => s.trim().toUpperCase()).filter(Boolean) })} />
+                    </div>
+                    <div style={{ flex: 1, minWidth: 140 }}>
+                      <label>Languages (comma-sep)</label>
+                      <input placeholder="en, hi" value={(aud.languages ?? []).join(", ")}
+                        onChange={(e) => setAud({ languages: e.target.value.split(",").map((s: string) => s.trim().toLowerCase()).filter(Boolean) })} />
+                    </div>
+                  </div>
+                </>
+              );
+            })()}
 
             <div className="dg-group">Re-ask after "No"</div>
             <label>Re-ask after "No"</label>

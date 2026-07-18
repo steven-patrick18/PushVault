@@ -103,9 +103,10 @@ export class PublicController {
   @RateLimit({ limit: 60, windowSec: 60 })
   promptConfig(
     @Query("property_key") propertyKey: string,
+    @Ip() ip: string,
     @Headers("origin") origin?: string,
   ) {
-    return this.service.getPromptConfig(propertyKey, origin);
+    return this.service.getPromptConfig(propertyKey, origin, ip);
   }
 
   /**

@@ -63,12 +63,21 @@ interface PromptConfig {
     /** re-show on the SAME page after the cooldown, not only on the next visit */
     same_page?: boolean;
   };
+  /** who to SHOW the opt-in prompt to (empty arrays / undefined = everyone) */
+  audience?: {
+    devices?: string[]; // "mobile" | "tablet" | "desktop"
+    sources?: string[]; // "google" | "facebook" | "instagram" | "tiktok" | "twitter" | "email" | "direct" | "other"
+    countries?: string[]; // ISO-2 upper (needs GeoIP; fails open if unknown)
+    languages?: string[]; // ISO language prefix, e.g. "en", "hi"
+    visitor?: "all" | "new" | "returning";
+  };
 }
 
 interface RemoteConfig {
   prompt_config: PromptConfig;
   icon_url: string | null;
   vapid_public_key: string;
+  visitor_country?: string | null; // server-resolved from IP (GeoIP)
 }
 
 (function () {
@@ -757,6 +766,61 @@ interface RemoteConfig {
     }
   }
 
+  // ---- audience targeting: decide whether THIS visitor should see the prompt
+  const LS_SEEN = "pv_seen_" + propertyKey;
+  function pvDevice(): string {
+    const ua = navigator.userAgent || "";
+    if (/iPad|Tablet|PlayBook|Silk|Android(?!.*Mobile)/i.test(ua)) return "tablet";
+    if (/Mobi|iPhone|iPod|Android.*Mobile|Windows Phone/i.test(ua)) return "mobile";
+    return "desktop";
+  }
+  function pvSource(): string {
+    try {
+      const s = (new URLSearchParams(location.search).get("utm_source") || "").toLowerCase();
+      const from = (label: string) => label;
+      const match = (v: string) =>
+        /google|adwords|gads/.test(v) ? "google"
+          : /facebook|fb/.test(v) ? "facebook"
+            : /insta/.test(v) ? "instagram"
+              : /tiktok/.test(v) ? "tiktok"
+                : /twitter|x\.com|t\.co/.test(v) ? "twitter"
+                  : /mail|email|newsletter/.test(v) ? "email"
+                    : "";
+      if (s) return from(match(s) || "other");
+      const r = (document.referrer || "").toLowerCase();
+      if (!r) return "direct";
+      if (location.hostname && r.indexOf(location.hostname) >= 0) return "direct";
+      return from(match(r) || "other");
+    } catch {
+      return "other";
+    }
+  }
+  function audienceMatches(cfg: RemoteConfig): boolean {
+    const a = cfg.prompt_config?.audience;
+    if (!a) return true;
+    if (a.devices && a.devices.length && a.devices.indexOf(pvDevice()) < 0) return false;
+    if (a.sources && a.sources.length && a.sources.indexOf(pvSource()) < 0) return false;
+    if (a.languages && a.languages.length) {
+      const lang = (navigator.language || "").slice(0, 2).toLowerCase();
+      if (a.languages.map((l) => l.toLowerCase()).indexOf(lang) < 0) return false;
+    }
+    if (a.countries && a.countries.length) {
+      const c = (cfg.visitor_country || "").toUpperCase();
+      // fail OPEN when country is unknown (no GeoIP DB) — never hide from everyone
+      if (c && a.countries.map((x) => x.toUpperCase()).indexOf(c) < 0) return false;
+    }
+    if (a.visitor && a.visitor !== "all") {
+      let seen = false;
+      try { seen = !!getChoice() || localStorage.getItem(LS_SEEN) === "1"; } catch { /* ignore */ }
+      if (a.visitor === "new" && seen) return false;
+      if (a.visitor === "returning" && !seen) return false;
+    }
+    return true;
+  }
+  function markSeen() {
+    try { localStorage.setItem(LS_SEEN, "1"); } catch { /* ignore */ }
+  }
+
   async function init() {
     // hosted opt-in pages render their own button — no auto banner there
     if ((window as any).__PV_NO_PROMPT) return;
@@ -771,12 +835,16 @@ interface RemoteConfig {
       if (!reask?.enabled) return;
       if (Date.now() - prior.ts < reaskCooldownMs(reask)) return;
       if (!pageMatches(cfg0.prompt_config?.pages)) return;
+      if (!audienceMatches(cfg0)) return;
       arm(cfg0);
       return;
     }
     const cfg = await fetchConfig();
     if (!cfg) return;
     if (!pageMatches(cfg.prompt_config?.pages)) return;
+    const show = audienceMatches(cfg);
+    markSeen(); // this visit counts as "returning" next time (regardless of show)
+    if (!show) return;
     arm(cfg);
   }
 

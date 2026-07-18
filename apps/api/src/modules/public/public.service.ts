@@ -96,12 +96,20 @@ export class PublicService {
     );
   }
 
-  async getPromptConfig(propertyKey: string, origin: string | undefined) {
+  async getPromptConfig(propertyKey: string, origin: string | undefined, ip?: string) {
     const property = await this.resolveProperty(propertyKey, origin);
+    // resolve the visitor's country for audience targeting (null if no GeoIP DB)
+    let visitorCountry: string | null = null;
+    try {
+      visitorCountry = this.geo.lookup(ip)?.country ?? null;
+    } catch {
+      visitorCountry = null;
+    }
     return {
       prompt_config: property.promptConfig,
       icon_url: property.iconUrl,
       vapid_public_key: property.vapidPublic ?? process.env.VAPID_PUBLIC_KEY,
+      visitor_country: visitorCountry,
     };
   }
 
