@@ -87,6 +87,46 @@ const DEFAULT_CFG: PromptConfig = {
   reask: { enabled: false, cooldown_value: 7, cooldown_unit: "days" },
 };
 
+/**
+ * Compress + square-fit a logo file entirely in the browser: resize to fit a
+ * 128px box (centered, aspect kept), export as WebP (PNG fallback) at ~0.85.
+ * The result is a small data: URL embedded in the prompt config, so it loads
+ * instantly with the popup — no extra image download, no lag.
+ */
+function compressLogo(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const N = 128;
+      const canvas = document.createElement("canvas");
+      canvas.width = N;
+      canvas.height = N;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) return reject(new Error("Canvas unavailable"));
+      const scale = Math.min(N / img.width, N / img.height, 1);
+      const w = Math.round(img.width * scale);
+      const h = Math.round(img.height * scale);
+      ctx.clearRect(0, 0, N, N);
+      ctx.drawImage(img, Math.round((N - w) / 2), Math.round((N - h) / 2), w, h);
+      let out = "";
+      try {
+        out = canvas.toDataURL("image/webp", 0.85);
+      } catch {
+        /* ignore */
+      }
+      if (!out.startsWith("data:image/webp")) out = canvas.toDataURL("image/png");
+      resolve(out);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("That file isn't a readable image"));
+    };
+    img.src = url;
+  });
+}
+
 export default function PropertyDetail() {
   const { id } = useParams<{ id: string }>();
   const [property, setProperty] = useState<Property | null>(null);
@@ -685,8 +725,58 @@ export default function PropertyDetail() {
               Auto-close 0 = stays until the visitor acts. Icon blank = no icon. These apply on the live site (the mini preview shows the main look).
             </div>
 
-            <label>Logo URL (optional — replaces the icon)</label>
-            <input value={cfg.style.logo ?? ""} placeholder="https://…" onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, logo: e.target.value || null } })} />
+            <label>Logo (optional — replaces the icon)</label>
+            <div style={{ display: "flex", gap: 12, alignItems: "center", flexWrap: "wrap" }}>
+              {cfg.style.logo && (
+                <img
+                  src={cfg.style.logo}
+                  alt="logo"
+                  style={{ width: 46, height: 46, borderRadius: 10, objectFit: "contain", background: "#fff", border: "1px solid var(--border,#2a2a38)" }}
+                />
+              )}
+              <label className="btn secondary small" style={{ cursor: "pointer" }}>
+                {cfg.style.logo ? "Replace file" : "⬆ Upload logo file"}
+                <input
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp,image/svg+xml,image/gif"
+                  style={{ display: "none" }}
+                  onChange={async (e) => {
+                    const f = e.target.files?.[0];
+                    e.target.value = "";
+                    if (!f) return;
+                    if (f.size > 8 * 1024 * 1024) {
+                      setError("Image is over 8 MB — pick a smaller file");
+                      return;
+                    }
+                    try {
+                      const data = await compressLogo(f);
+                      const kb = Math.round((data.length * 0.75) / 1024);
+                      setCfg({ ...cfg, style: { ...cfg.style, logo: data } });
+                      setMsg(`Logo added & compressed to ~${kb} KB — remember to Save`);
+                      setError("");
+                    } catch (err: any) {
+                      setError(err.message || "Could not process that image");
+                    }
+                  }}
+                />
+              </label>
+              {cfg.style.logo && (
+                <button className="btn secondary small" onClick={() => setCfg({ ...cfg, style: { ...cfg.style, logo: null } })}>
+                  Remove
+                </button>
+              )}
+            </div>
+            <div style={{ fontSize: 11, color: "var(--text-dim)", marginTop: 6 }}>
+              Any image works — we auto-resize to 128px and compress it so it loads instantly with the popup
+              (no lag). <b>Best quality:</b> a <b>square</b> logo, <b>PNG with a transparent background</b> (or SVG),
+              at least 128×128px. Or paste a URL instead:
+            </div>
+            <input
+              style={{ marginTop: 6 }}
+              value={cfg.style.logo && cfg.style.logo.startsWith("data:") ? "" : cfg.style.logo ?? ""}
+              placeholder="https://… (leave blank if you uploaded a file)"
+              onChange={(e) => setCfg({ ...cfg, style: { ...cfg.style, logo: e.target.value || null } })}
+            />
 
             <label>Re-ask after "No"</label>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
