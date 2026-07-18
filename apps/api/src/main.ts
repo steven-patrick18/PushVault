@@ -8,7 +8,6 @@ import { join } from "node:path";
 import { AppModule } from "./app.module";
 import { PublicService } from "./modules/public/public.service";
 import { renderOptInPage } from "./modules/public/hosted-page";
-import { DirectoryService } from "./modules/directory/directory.service";
 import { AllExceptionsFilter } from "./modules/troubleshoot/all-exceptions.filter";
 import { ErrorLogService } from "./modules/troubleshoot/error-log.service";
 
@@ -86,48 +85,18 @@ async function bootstrap() {
   // show the dashboard instead of the opt-in page on property subdomains
   if (haveDashboard) app.useStaticAssets(dashboardDist, { index: false });
 
-  const directorySvc = app.get(DirectoryService);
-
-  // preview a directory site on the dashboard host without DNS:
-  //   /d/<site-domain>/...  → renders that site with internal links kept under /d
-  express.get(/^\/d\/([^/]+)(\/.*)?$/, async (req: any, res: any) => {
-    try {
-      const domain = req.params[0];
-      const sub = req.params[1] || "/";
-      const site = await directorySvc.siteByHost(domain);
-      if (!site) return res.status(404).send("No directory site for that domain. Add one in the dashboard.");
-      (site as any)._base = "/d/" + domain;
-      const out = await directorySvc.renderPage(site, sub, req.query ?? {});
-      res.status(out.status).setHeader("Content-Type", "text/html; charset=utf-8");
-      return res.send(out.html);
-    } catch {
-      return res.status(500).send("Error");
-    }
-  });
-
-  express.get(/^\/(?!api\/|cdn\/|d\/).*/, async (req: any, res: any) => {
+  express.get(/^\/(?!api\/|cdn\/).*/, async (req: any, res: any) => {
     const host = String(req.headers.host ?? "").toLowerCase().split(":")[0];
     const isDashboard = !dashboardHost || host === dashboardHost || host === "localhost" || host === "127.0.0.1";
     if (isDashboard) {
       if (haveDashboard) return res.sendFile(join(dashboardDist, "index.html"));
       return res.status(404).send("Not found");
     }
-    // a directory site host → server-rendered directory pages
-    try {
-      const site = await directorySvc.siteByHost(req.headers.host);
-      if (site) {
-        const out = await directorySvc.renderPage(site, req.path, req.query ?? {});
-        res.status(out.status).setHeader("Content-Type", "text/html; charset=utf-8");
-        return res.send(out.html);
-      }
-    } catch {
-      return res.status(500).send("Error");
-    }
-    // otherwise a property subdomain → branded hosted opt-in page
+    // a property subdomain → branded hosted opt-in page
     try {
       const property = await publicSvc.propertyByHost(req.headers.host);
       if (!property) {
-        return res.status(404).send("No site is configured for this domain.");
+        return res.status(404).send("No PushVault property is configured for this domain.");
       }
       res.setHeader("Content-Type", "text/html; charset=utf-8");
       return res.send(renderOptInPage(property, cdnBase));

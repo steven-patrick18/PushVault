@@ -55,49 +55,6 @@ enum SendStatus {
   @@map("send_status")
 }
 
-// ---------- customer-care directory (server-rendered SEO site) ----------
-
-model DirectorySite {
-  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  tenantId     String   @map("tenant_id") @db.Uuid
-  domain       String   @unique // the host this directory serves on
-  name         String // "India Customer Care"
-  tagline      String? // homepage subtitle
-  adsenseClient String? @map("adsense_client") // ca-pub-XXXX (paste once approved)
-  themeColor   String   @default("#7C3AED") @map("theme_color")
-  status       String   @default("active")
-  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt    DateTime? @updatedAt @map("updated_at") @db.Timestamptz()
-
-  companies DirectoryCompany[]
-
-  @@map("directory_sites")
-}
-
-model DirectoryCompany {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  siteId      String   @map("site_id") @db.Uuid
-  slug        String // url segment, unique within a site
-  name        String // "Amazon India"
-  category    String   @default("Other") // Banks, Telecom, E-commerce, ...
-  logoUrl     String?  @map("logo_url")
-  phones      String[] // official numbers only
-  emails      String[]
-  website     String? // official site
-  hours       String? // "24x7", "Mon-Sat 9-6"
-  content     String?  @db.Text // original write-up (AdSense needs real content)
-  featured    Boolean  @default(false)
-  views       Int      @default(0)
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz()
-  updatedAt   DateTime? @updatedAt @map("updated_at") @db.Timestamptz()
-
-  site DirectorySite @relation(fields: [siteId], references: [id], onDelete: Cascade)
-
-  @@unique([siteId, slug])
-  @@index([siteId, category])
-  @@map("directory_companies")
-}
-
 // ---------- models ----------
 
 model Tenant {
