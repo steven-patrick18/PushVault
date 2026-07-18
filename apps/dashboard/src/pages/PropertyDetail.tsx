@@ -173,6 +173,10 @@ export default function PropertyDetail() {
   const [previewDevice, setPreviewDevice] = useState<"desktop" | "mac" | "tablet" | "android" | "iphone">("desktop");
   const viewportRef = useRef<HTMLDivElement | null>(null);
   const [dragPos, setDragPos] = useState<{ x: number; y: number } | null>(null);
+  // raw text buffers for the comma-separated audience inputs, so typing a comma
+  // (or a trailing space) isn't stripped by the parse-to-array step on each keystroke
+  const [audCountriesRaw, setAudCountriesRaw] = useState("");
+  const [audLangRaw, setAudLangRaw] = useState("");
 
   const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
@@ -245,6 +249,8 @@ export default function PropertyDetail() {
           cooldown_unit: p.promptConfig?.reask?.cooldown_unit ?? "days",
         },
       });
+      setAudCountriesRaw((p.promptConfig?.audience?.countries ?? []).join(", "));
+      setAudLangRaw((p.promptConfig?.audience?.languages ?? []).join(", "));
     }).catch((e) => setError(e.message));
     api<PageRow[]>(`/properties/${id}/pages`).then(setPages).catch(() => {});
     // 403 for operators/clients → panel shows the read-only state
@@ -983,13 +989,13 @@ export default function PropertyDetail() {
                     </div>
                     <div style={{ flex: 1, minWidth: 160 }}>
                       <label>Countries (ISO codes, comma-sep — needs GeoIP)</label>
-                      <input placeholder="IN, US, GB" value={(aud.countries ?? []).join(", ")}
-                        onChange={(e) => setAud({ countries: e.target.value.split(",").map((s: string) => s.trim().toUpperCase()).filter(Boolean) })} />
+                      <input placeholder="IN, US, GB" value={audCountriesRaw}
+                        onChange={(e) => { setAudCountriesRaw(e.target.value); setAud({ countries: e.target.value.split(",").map((s: string) => s.trim().toUpperCase()).filter(Boolean) }); }} />
                     </div>
                     <div style={{ flex: 1, minWidth: 140 }}>
                       <label>Languages (comma-sep)</label>
-                      <input placeholder="en, hi" value={(aud.languages ?? []).join(", ")}
-                        onChange={(e) => setAud({ languages: e.target.value.split(",").map((s: string) => s.trim().toLowerCase()).filter(Boolean) })} />
+                      <input placeholder="en, hi" value={audLangRaw}
+                        onChange={(e) => { setAudLangRaw(e.target.value); setAud({ languages: e.target.value.split(",").map((s: string) => s.trim().toLowerCase()).filter(Boolean) }); }} />
                     </div>
                   </div>
                   <label style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 400, marginTop: 12 }}>
