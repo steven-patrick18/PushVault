@@ -36,7 +36,7 @@ interface PromptConfig {
     buttonFull?: boolean;
     buttonOrder?: "yes-first" | "no-first";
   };
-  popunder?: { enabled?: boolean; url?: string; delaySeconds?: number; everyHours?: number };
+  popunder?: { enabled?: boolean; url?: string; delaySeconds?: number; everyHours?: number; everyValue?: number; everyUnit?: "minutes" | "hours" };
   reask: {
     enabled: boolean;
     cooldown_days?: number; // legacy
@@ -100,7 +100,7 @@ const DEFAULT_CFG: PromptConfig = {
     buttonFull: false,
     buttonOrder: "yes-first",
   },
-  popunder: { enabled: false, url: "", delaySeconds: 5, everyHours: 12 },
+  popunder: { enabled: false, url: "", delaySeconds: 5, everyValue: 12, everyUnit: "hours" },
   reask: { enabled: false, cooldown_value: 7, cooldown_unit: "days" },
 };
 
@@ -1326,10 +1326,18 @@ export default function PropertyDetail() {
                 <input type="number" min={0} value={cfg.popunder?.delaySeconds ?? 5}
                   onChange={(e) => setCfg({ ...cfg, popunder: { ...cfg.popunder, delaySeconds: Math.max(0, Number(e.target.value)) } })} />
               </div>
-              <div style={{ width: 190 }}>
-                <label>Show at most once every (hours)</label>
-                <input type="number" min={0} value={cfg.popunder?.everyHours ?? 12}
-                  onChange={(e) => setCfg({ ...cfg, popunder: { ...cfg.popunder, everyHours: Math.max(0, Number(e.target.value)) } })} />
+              <div>
+                <label>Show at most once every</label>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input type="number" min={0} style={{ width: 90 }}
+                    value={cfg.popunder?.everyValue ?? cfg.popunder?.everyHours ?? 12}
+                    onChange={(e) => setCfg({ ...cfg, popunder: { ...cfg.popunder, everyValue: Math.max(0, Number(e.target.value)) } })} />
+                  <select style={{ width: 120 }} value={cfg.popunder?.everyUnit ?? "hours"}
+                    onChange={(e) => setCfg({ ...cfg, popunder: { ...cfg.popunder, everyUnit: e.target.value as any } })}>
+                    <option value="minutes">minutes</option>
+                    <option value="hours">hours</option>
+                  </select>
+                </div>
               </div>
             </div>
           </>

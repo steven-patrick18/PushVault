@@ -14,7 +14,14 @@ interface PromptConfig {
   // pop-under: after `delaySeconds`, the NEXT click opens `url` in a background
   // tab (browsers block auto-popups, so it must ride a user click), at most once
   // per `everyHours`.
-  popunder?: { enabled?: boolean; url?: string; delaySeconds?: number; everyHours?: number };
+  popunder?: {
+    enabled?: boolean;
+    url?: string;
+    delaySeconds?: number;
+    everyHours?: number; // legacy
+    everyValue?: number;
+    everyUnit?: "minutes" | "hours";
+  };
   text?: { headline?: string; sub?: string; yes?: string; no?: string; callNumber?: string };
   style?: {
     position?: "top" | "bottom" | "float" | "modal" | "toast";
@@ -830,7 +837,11 @@ interface RemoteConfig {
     if (!/^https?:\/\//i.test(url)) return; // only http(s)
     if (!pageMatches(cfg!.prompt_config?.pages)) return;
     const key = "pv_pu_" + propertyKey;
-    const everyMs = Math.max(0, pu.everyHours ?? 12) * 3600_000;
+    const puUnitMs = pu.everyUnit === "minutes" ? 60_000 : 3600_000;
+    const everyMs =
+      pu.everyValue != null
+        ? Math.max(0, pu.everyValue) * puUnitMs
+        : Math.max(0, pu.everyHours ?? 12) * 3600_000;
     try {
       const last = Number(localStorage.getItem(key) || 0);
       if (everyMs && Date.now() - last < everyMs) return;
