@@ -61,6 +61,16 @@ class ClickDto {
   send_id: string;
 }
 
+class TurnstileDto {
+  @IsString()
+  @IsNotEmpty()
+  property_key: string;
+
+  @IsString()
+  @IsNotEmpty()
+  token: string;
+}
+
 class PageviewDto {
   @IsString()
   @IsNotEmpty()
@@ -145,6 +155,20 @@ export class PublicController {
   @RateLimit({ limit: 120, windowSec: 60 })
   click(@Body() dto: ClickDto) {
     return this.service.trackClick(dto.send_id);
+  }
+
+  /** Cloudflare Turnstile verification — the snippet posts the widget token; we
+   * check it server-side with the property's secret and return { ok }. */
+  @Post("turnstile")
+  @HttpCode(200)
+  @Header("Cache-Control", "no-store")
+  @RateLimit({ limit: 30, windowSec: 60, perProperty: true })
+  turnstile(
+    @Body() dto: TurnstileDto,
+    @Ip() ip: string,
+    @Headers("origin") origin?: string,
+  ) {
+    return this.service.verifyTurnstile(dto.property_key, dto.token, ip, origin);
   }
 
   /**

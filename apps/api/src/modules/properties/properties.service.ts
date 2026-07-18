@@ -107,6 +107,8 @@ export class PropertiesService {
       iconUrl: string | null;
       promptConfig: unknown;
       callDomain: string | null;
+      turnstileSiteKey: string;
+      turnstileSecret: string;
       frequencyCapPerDay: number;
       frequencyCapPerWeek: number;
       status: string;
@@ -126,11 +128,27 @@ export class PropertiesService {
       const d = data.callDomain ? normalizeDomain(data.callDomain) : "";
       patch.callDomain = d || null;
     }
+    // Cloudflare Turnstile keys — only admins/managers may set them; empty clears.
+    // The secret is write-only (never returned by serialize).
+    if (data.turnstileSiteKey !== undefined || data.turnstileSecret !== undefined) {
+      if (user.role !== "admin" && user.role !== "manager") {
+        throw new BadRequestException("Only admins or managers can change Turnstile keys");
+      }
+    }
+    if (data.turnstileSiteKey !== undefined) {
+      patch.turnstileSiteKey = data.turnstileSiteKey.trim() || null;
+    }
+    if (data.turnstileSecret !== undefined) {
+      patch.turnstileSecret = data.turnstileSecret.trim() || null;
+    }
     const property = await this.db(user).property.update({
       where: { id },
       data: patch,
     });
-    await this.audit(user, "property.update", id, { name: before.name }, data);
+    // never write the secret into the audit trail
+    const audited: any = { ...data };
+    if ("turnstileSecret" in audited) audited.turnstileSecret = audited.turnstileSecret ? "***" : null;
+    await this.audit(user, "property.update", id, { name: before.name }, audited);
     return this.serialize(property);
   }
 
@@ -391,11 +409,13 @@ export class PropertiesService {
   }
 
   private serialize(p: any) {
-    const { apiKeyHash, vapidPrivate, monthlySendQuota, ...rest } = p;
+    const { apiKeyHash, vapidPrivate, monthlySendQuota, turnstileSecret, ...rest } = p;
     return {
       ...rest,
       monthlySendQuota: monthlySendQuota === null ? null : Number(monthlySendQuota),
       hasApiKey: Boolean(apiKeyHash),
+      // never leak the Turnstile secret to the dashboard; just say whether it's set
+      turnstileConfigured: Boolean(turnstileSecret && p.turnstileSiteKey),
     };
   }
 

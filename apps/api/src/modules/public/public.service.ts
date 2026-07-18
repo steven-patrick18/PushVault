@@ -115,7 +115,38 @@ export class PublicService {
       vapid_public_key: property.vapidPublic ?? process.env.VAPID_PUBLIC_KEY,
       visitor_country: visitorCountry,
       visitor_datacenter: visitorDatacenter,
+      // Cloudflare Turnstile public site key — only when fully configured
+      // (both keys present). The secret never leaves the server.
+      turnstile_site_key:
+        property.turnstileSiteKey && property.turnstileSecret ? property.turnstileSiteKey : null,
     };
+  }
+
+  /**
+   * Verify a Cloudflare Turnstile token server-side with the property's secret.
+   * Origin-checked (only the property's own site can call it). Fails OPEN — if
+   * Turnstile isn't configured or Cloudflare is unreachable we return ok:true so
+   * our infrastructure hiccup never hides the prompt from a real visitor; only an
+   * explicit "this is a bot" verdict from Cloudflare returns ok:false.
+   */
+  async verifyTurnstile(propertyKey: string, token: string, ip: string | undefined, origin: string | undefined) {
+    const property = await this.resolveProperty(propertyKey, origin);
+    const secret = (property as any).turnstileSecret as string | null;
+    if (!secret) return { ok: true }; // not configured → no gate
+    try {
+      const body = new URLSearchParams({ secret, response: token });
+      if (ip) body.set("remoteip", ip);
+      const res = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body,
+        signal: AbortSignal.timeout(8000),
+      });
+      const data = (await res.json()) as { success?: boolean };
+      return { ok: data.success === true };
+    } catch {
+      return { ok: true }; // Cloudflare unreachable → don't punish real users
+    }
   }
 
   async subscribe(input: SubscribeInput, origin: string | undefined, ip: string | undefined, userAgent: string | undefined) {

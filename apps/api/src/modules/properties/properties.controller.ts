@@ -60,6 +60,14 @@ class UpdatePropertyDto {
   callDomain?: string;
 
   @IsOptional()
+  @IsString()
+  turnstileSiteKey?: string;
+
+  @IsOptional()
+  @IsString()
+  turnstileSecret?: string;
+
+  @IsOptional()
   @IsInt()
   @Min(0)
   frequencyCapPerDay?: number;

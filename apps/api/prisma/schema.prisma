@@ -122,6 +122,8 @@ model Property {
   verification        Json?
   adsCheck            Json?     @map("ads_check") // last Google-norms compliance check {verdict, checks:[...], at}
   callDomain          String?   @map("call_domain") // branded host for the click-to-call bridge (must point at this server)
+  turnstileSiteKey    String?   @map("turnstile_site_key") // Cloudflare Turnstile public site key (safe to expose in the snippet)
+  turnstileSecret     String?   @map("turnstile_secret")   // Cloudflare Turnstile secret — server-side only, never returned to the browser
   createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz()
   updatedAt           DateTime? @updatedAt @map("updated_at") @db.Timestamptz()
 

@@ -37,7 +37,7 @@ interface PromptConfig {
     buttonFull?: boolean;
     buttonOrder?: "yes-first" | "no-first";
   };
-  audience?: { devices?: string[]; sources?: string[]; countries?: string[]; languages?: string[]; visitor?: "all" | "new" | "returning"; humansOnly?: boolean; blockDatacenter?: boolean };
+  audience?: { devices?: string[]; sources?: string[]; countries?: string[]; languages?: string[]; visitor?: "all" | "new" | "returning"; humansOnly?: boolean; blockDatacenter?: boolean; turnstile?: boolean };
   popunder?: { enabled?: boolean; url?: string; delaySeconds?: number; everyHours?: number; everyValue?: number; everyUnit?: "minutes" | "hours" };
   reask: {
     enabled: boolean;
@@ -60,6 +60,8 @@ interface Property {
   verifiedAt: string | null;
   verification: { checkedAt: string; results: { domain: string; url: string | null; ok: boolean; status: number | null }[] } | null;
   install?: { script: string; serviceWorker: string; swUrl?: string; serverIp?: string | null };
+  turnstileSiteKey?: string | null;
+  turnstileConfigured?: boolean;
 }
 
 interface PageRow {
@@ -102,7 +104,7 @@ const DEFAULT_CFG: PromptConfig = {
     buttonFull: false,
     buttonOrder: "yes-first",
   },
-  audience: { devices: [], sources: [], countries: [], languages: [], visitor: "all", humansOnly: false, blockDatacenter: false },
+  audience: { devices: [], sources: [], countries: [], languages: [], visitor: "all", humansOnly: false, blockDatacenter: false, turnstile: false },
   popunder: { enabled: false, url: "", delaySeconds: 5, everyValue: 12, everyUnit: "hours" },
   reask: { enabled: false, cooldown_value: 7, cooldown_unit: "days" },
 };
@@ -177,6 +179,11 @@ export default function PropertyDetail() {
   // (or a trailing space) isn't stripped by the parse-to-array step on each keystroke
   const [audCountriesRaw, setAudCountriesRaw] = useState("");
   const [audLangRaw, setAudLangRaw] = useState("");
+  // Cloudflare Turnstile keys (property-level, saved separately from promptConfig).
+  // The secret is write-only — the server never returns it, so we start blank.
+  const [tsSiteKey, setTsSiteKey] = useState("");
+  const [tsSecret, setTsSecret] = useState("");
+  const [tsBusy, setTsBusy] = useState(false);
 
   const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
@@ -251,6 +258,8 @@ export default function PropertyDetail() {
       });
       setAudCountriesRaw((p.promptConfig?.audience?.countries ?? []).join(", "));
       setAudLangRaw((p.promptConfig?.audience?.languages ?? []).join(", "));
+      setTsSiteKey((p as any).turnstileSiteKey ?? "");
+      setTsSecret("");
     }).catch((e) => setError(e.message));
     api<PageRow[]>(`/properties/${id}/pages`).then(setPages).catch(() => {});
     // 403 for operators/clients → panel shows the read-only state
@@ -287,6 +296,25 @@ export default function PropertyDetail() {
       setError(e.message);
     } finally {
       setSaving(false);
+    }
+  }
+
+  async function saveTurnstileKeys() {
+    setTsBusy(true);
+    setMsg("");
+    setError("");
+    try {
+      const body: any = { turnstileSiteKey: tsSiteKey.trim() };
+      // only send the secret when the user typed one (blank = keep existing)
+      if (tsSecret.trim()) body.turnstileSecret = tsSecret.trim();
+      await api(`/properties/${id}`, { method: "PATCH", body: JSON.stringify(body) });
+      setMsg("Turnstile keys saved");
+      setTsSecret("");
+      load();
+    } catch (e: any) {
+      setError(e.message);
+    } finally {
+      setTsBusy(false);
     }
   }
 
@@ -1024,6 +1052,46 @@ export default function PropertyDetail() {
                         browsing through a VPN.
                       </p>
                     </>
+                  )}
+                  <label style={{ display: "flex", gap: 8, alignItems: "center", fontWeight: 400, marginTop: 12 }}>
+                    <input type="checkbox" checked={aud.turnstile === true}
+                      onChange={(e) => setAud({ turnstile: e.target.checked })} />
+                    🛡️ Require Cloudflare Turnstile (invisible CAPTCHA)
+                    {property?.turnstileConfigured
+                      ? <span style={{ color: "#4ade80", fontSize: 12 }}>· keys set ✓</span>
+                      : <span style={{ color: "#fbbf24", fontSize: 12 }}>· add keys below</span>}
+                  </label>
+                  {aud.turnstile && (
+                    <div style={{ marginLeft: 26, marginTop: 8 }}>
+                      <p className="hint" style={{ margin: "0 0 8px", fontSize: 12, opacity: 0.75 }}>
+                        Enterprise-grade bot detection from Cloudflare's network — mostly invisible,
+                        no puzzle. Create a free widget at{" "}
+                        <a href="https://dash.cloudflare.com/?to=/:account/turnstile" target="_blank" rel="noreferrer">dash.cloudflare.com → Turnstile</a>{" "}
+                        (widget type <b>Managed</b>, add your site domain), then paste the two keys here.
+                        The secret is stored server-side and never sent to browsers.
+                      </p>
+                      <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-end" }}>
+                        <div style={{ flex: 1, minWidth: 220 }}>
+                          <label>Site key (public)</label>
+                          <input placeholder="0x4AAAAAAA…" value={tsSiteKey}
+                            onChange={(e) => setTsSiteKey(e.target.value)} />
+                        </div>
+                        <div style={{ flex: 1, minWidth: 220 }}>
+                          <label>Secret key {property?.turnstileConfigured && <span style={{ opacity: 0.6 }}>(leave blank to keep)</span>}</label>
+                          <input type="password" placeholder={property?.turnstileConfigured ? "••••••••" : "0x4AAAAAAA…"} value={tsSecret}
+                            onChange={(e) => setTsSecret(e.target.value)} />
+                        </div>
+                        <button className="btn secondary small" disabled={tsBusy} onClick={saveTurnstileKeys}>
+                          {tsBusy ? "Saving…" : "Save keys"}
+                        </button>
+                      </div>
+                      <p className="hint" style={{ margin: "8px 0 0", fontSize: 12, opacity: 0.65 }}>
+                        Fails safe: if Cloudflare is unreachable or its script is blocked, the prompt
+                        still shows — only an explicit “bot” verdict holds it back. If your site sends a
+                        Content-Security-Policy, allow <code>challenges.cloudflare.com</code> in
+                        <code> script-src</code> and <code>frame-src</code>.
+                      </p>
+                    </div>
                   )}
                 </>
               );

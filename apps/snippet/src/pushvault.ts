@@ -72,6 +72,7 @@ interface PromptConfig {
     visitor?: "all" | "new" | "returning";
     humansOnly?: boolean; // skip bots / crawlers / headless automation
     blockDatacenter?: boolean; // also skip datacenter/cloud/VPN IPs (server-resolved)
+    turnstile?: boolean; // require a Cloudflare Turnstile pass before showing
   };
 }
 
@@ -81,6 +82,7 @@ interface RemoteConfig {
   vapid_public_key: string;
   visitor_country?: string | null; // server-resolved from IP (GeoIP)
   visitor_datacenter?: boolean; // server-resolved: IP is a datacenter/cloud/VPN network
+  turnstile_site_key?: string | null; // Cloudflare Turnstile public site key (when configured)
 }
 
 (function () {
@@ -709,10 +711,12 @@ interface RemoteConfig {
       renderBanner(cfg);
     };
     // humans-only: hold the prompt until a real interaction is observed, so a
-    // silent (never-moving) automated session never sees it.
+    // silent (never-moving) automated session never sees it. Then, if Turnstile
+    // is enabled, run the invisible challenge before rendering.
     const fire = () => {
-      if (humansOnly) whenHuman(render);
-      else render();
+      const gated = () => turnstileGate(cfg, render); // no-op if Turnstile is off
+      if (humansOnly) whenHuman(gated);
+      else gated();
     };
     if (trigger.type === "immediate") {
       fire();
@@ -887,6 +891,65 @@ interface RemoteConfig {
       cb();
     };
     HUMAN_EVENTS.forEach((t) => addEventListener(t, wait, { passive: true } as any));
+  }
+
+  // ---- Cloudflare Turnstile: invisible bot-network verification (opt-in per
+  // property). We render a hidden managed widget, POST the token to our API to
+  // verify with the secret, and only show the prompt on a pass. Fails OPEN on any
+  // infrastructure error (script blocked / verify unreachable / challenge error)
+  // so a real visitor is never hidden — only Cloudflare's explicit bot verdict
+  // (ok:false) holds the prompt back.
+  let _tsScript: Promise<void> | null = null;
+  function loadTurnstile(): Promise<void> {
+    if ((window as any).turnstile) return Promise.resolve();
+    if (_tsScript) return _tsScript;
+    _tsScript = new Promise((resolve, reject) => {
+      const s = document.createElement("script");
+      s.src = "https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit";
+      s.async = true;
+      s.defer = true;
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error("turnstile blocked"));
+      document.head.appendChild(s);
+    });
+    return _tsScript;
+  }
+  function turnstileGate(cfg: RemoteConfig, cb: () => void) {
+    const sk = cfg.turnstile_site_key;
+    if (!cfg.prompt_config?.audience?.turnstile || !sk) { cb(); return; }
+    let settled = false;
+    const done = (show: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(safety);
+      if (show) cb();
+    };
+    // if the challenge stalls (blocked script, no callback), show anyway
+    const safety = setTimeout(() => done(true), 12000);
+    loadTurnstile().then(() => {
+      const ts = (window as any).turnstile;
+      if (!ts) return done(true);
+      const holder = document.createElement("div");
+      holder.style.cssText = "position:fixed;left:-9999px;top:0;width:1px;height:1px";
+      document.body.appendChild(holder);
+      ts.render(holder, {
+        sitekey: sk,
+        callback: async (token: string) => {
+          try {
+            const r = await fetch(API + "/turnstile", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ property_key: propertyKey, token }),
+            });
+            const j = await r.json();
+            done(!!j && j.ok === true); // explicit bot verdict → hide
+          } catch {
+            done(true); // verify network error → fail open
+          }
+        },
+        "error-callback": () => done(true), // challenge error → fail open
+      });
+    }).catch(() => done(true)); // script blocked → fail open
   }
 
   function audienceMatches(cfg: RemoteConfig): boolean {
