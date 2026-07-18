@@ -10,7 +10,9 @@
 set -euo pipefail
 
 REPO="${PUSHVAULT_REPO:-/root/PushVault}"
-CONTROL="$REPO/control"
+# compose resolves ./control relative to the compose file (deploy/), so the
+# container's /control maps to deploy/control — watch that same path
+CONTROL="$REPO/deploy/control"
 REQ="$CONTROL/update.request"
 STATUS="$CONTROL/update.status"
 LOCK="$CONTROL/update.lock"
